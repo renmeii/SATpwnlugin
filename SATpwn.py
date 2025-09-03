@@ -319,7 +319,7 @@ class SmartAutoTune(plugins.Plugin):
     def _epoch_recon(self, agent, epoch, epoch_data):
         supported_channels = agent.supported_channels()
         reader = self._number_reader(supported_channels)
-        if reader != "end"
+        if reader != "end":
             logging.info(f"[SATpwn] RECON: inspecting channel {reader} and gathering info...")
             agent.set_channel(reader)
         else:
@@ -332,7 +332,7 @@ class SmartAutoTune(plugins.Plugin):
             return
 
         supported_channels = agent.supported_channels()
-        logging.info(f"{supported_channels}")
+        logging.debug(f"{supported_channels}")
 
         if not supported_channels:
             logging.info(f"{supported_channels}")
