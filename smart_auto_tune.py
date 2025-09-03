@@ -29,8 +29,6 @@ class SmartAutoTune(plugins.Plugin):
     CLIENT_WEIGHT = 1
     SCORE_RECALCULATION_INTERVAL_SECONDS = 30  # 30 seconds
     EXPLORATION_PROBABILITY = 0.1  # 10% chance to explore a random channel in loose mode
-
-    
     DRIVE_BY_AP_EXPIRY_SECONDS = 1800  # 30 minutes
     DRIVE_BY_CLIENT_EXPIRY_SECONDS = 900  # 15 minutes
     DRIVE_BY_ATTACK_SCORE_THRESHOLD = 20 # Lower score threshold
@@ -41,7 +39,7 @@ class SmartAutoTune(plugins.Plugin):
         self.agent = None
         self.memory = {}
         self.modes = ['strict', 'loose', 'drive-by']
-        self.memory_path = '/etc/pwnagotchi/smart_auto_tune_memory.json'
+        self.memory_path = '/etc/pwnagotchi/SATpwn_memory.json'
         self.executor = ThreadPoolExecutor(max_workers=5)
         self.mode = self.modes[0]
         self.channel_stats = {}
@@ -52,9 +50,9 @@ class SmartAutoTune(plugins.Plugin):
         try:
             with open(self.memory_path, 'w') as f:
                 json.dump(self.memory, f, indent=4)
-            logging.info(f"[smart_auto_tune] Memory saved to {self.memory_path}")
+            logging.info(f"[SATpwn] Memory saved to {self.memory_path}")
         except Exception as e:
-            logging.error(f"[smart_auto_tune] Error saving memory: {e}")
+            logging.error(f"[SATpwn] Error saving memory: {e}")
 
     def _load_memory(self):
         """Loads the AP/client memory from a JSON file."""
@@ -62,9 +60,9 @@ class SmartAutoTune(plugins.Plugin):
             try:
                 with open(self.memory_path, 'r') as f:
                     self.memory = json.load(f)
-                logging.info(f"[smart_auto_tune] Memory loaded from {self.memory_path}")
+                logging.info(f"[SATpwn] Memory loaded from {self.memory_path}")
             except Exception as e:
-                logging.error(f"[smart_auto_tune] Error loading memory: {e}")
+                logging.error(f"[SATpwn] Error loading memory: {e}")
 
     def _cleanup_memory(self):
         """Removes old APs and clients from memory to keep it relevant."""
@@ -115,9 +113,9 @@ class SmartAutoTune(plugins.Plugin):
         # to fetch the complete AP/client objects from the agent's session to
         # perform a real deauthentication attack.
         try:
-            logging.info(f"[smart_auto_tune] Executing tactical attack on {client_mac} via {ap_mac}")
+            logging.info(f"[SATpwn] Executing tactical attack on {client_mac} via {ap_mac}")
         except Exception as e:
-            logging.error(f"[smart_auto_tune] Attack execution failed: {e}")
+            logging.error(f"[SATpwn] Attack execution failed: {e}")
 
     def _get_channel_stats(self):
         """Aggregates stats per channel from memory."""
@@ -133,23 +131,22 @@ class SmartAutoTune(plugins.Plugin):
         return channel_stats
 
     def on_loaded(self):
-        logging.info("[smart_auto_tune] plugin loaded")
+        logging.info("[SATpwn] plugin loaded")
         self._load_memory()
 
     def on_unload(self, ui):
         self._save_memory()
         self.executor.shutdown(wait=False)
-        logging.info("[smart_auto_tune] plugin unloaded")
+        logging.info("[SATpwn] plugin unloaded")
 
     def on_ready(self, agent):
         self.agent = agent
         self.ready = True
-        logging.info("[smart_auto_tune] plugin ready")
+        logging.info("[SATpwn] plugin ready")
 
     def on_ui_setup(self, ui):
         ui.add_element('sat_mode', components.Text(color=view.BLACK, value=f'SAT Mode: {self.mode.capitalize()}',
-                                                  position=(55, 120),
-                                                  font=view.FONT_BOLD))
+                                                  position=(55, 120)))
 
     def on_ui_update(self, ui):
         ui.set('sat_mode', f'SAT Mode: {self.mode.capitalize()}')
@@ -211,32 +208,17 @@ class SmartAutoTune(plugins.Plugin):
         
         self.memory_is_dirty = True
 
-    def on_epoch(self, agent, epoch, epoch_data):
-        self._cleanup_memory()
-        if not self.ready:
-            return
-
-        supported_channels = agent.supported_channels()
-        if not supported_channels:
-            logging.warning("[smart_auto_tune] No supported channels found.")
-            return
-
+#code for all of the modes (START)
+    def _epoch_strict():
         if self.memory_is_dirty or not self.channel_stats:
             self.channel_stats = self._get_channel_stats()
             self.memory_is_dirty = False
-
-        # Exploration logic for 'loose' mode
-        if self.mode == 'loose' and random.random() < self.EXPLORATION_PROBABILITY:
-            next_channel = random.choice(supported_channels)
-            logging.info(f"[smart_auto_tune] Exploring random channel {next_channel} (Mode: loose)")
-            agent.set_channel(next_channel)
-            return
 
         # Weighted selection logic
         channels = list(self.channel_stats.keys())
         if not channels:
             next_channel = random.choice(supported_channels)
-            logging.info(f"[smart_auto_tune] No channel data, hopping to random channel {next_channel}")
+            logging.info(f"[SATpwn] No channel data, hopping to random channel {next_channel}")
             agent.set_channel(next_channel)
             return
 
@@ -248,10 +230,56 @@ class SmartAutoTune(plugins.Plugin):
                 weight *= self.PMKID_FRIENDLY_BOOST_FACTOR
             weights.append(weight)
 
-        if self.mode == 'loose':
-            exploration_bonus = 1.0
-            weights = [w + exploration_bonus for w in weights]
-            logging.info("[smart_auto_tune] Applied exploration bonus for loose mode.")
+        # Filter down to only channels that are supported by the hardware
+        supported_channels_with_weights = []
+        supported_weights = []
+        for i, ch in enumerate(channels):
+            if ch in supported_channels:
+                supported_channels_with_weights.append(ch)
+                supported_weights.append(weights[i])
+
+        if not supported_channels_with_weights:
+            next_channel = random.choice(supported_channels)
+            logging.info(f"[SATpwn] No tracked channels are supported, hopping to random supported channel {next_channel}")
+        else:
+            total_weight = sum(supported_weights)
+            if total_weight == 0:
+                next_channel = random.choice(supported_channels_with_weights)
+                logging.info(f"[SATpwn] All tracked channel weights are zero, hopping to random tracked/supported channel {next_channel}")
+            else:
+                next_channel = random.choices(supported_channels_with_weights, weights=supported_weights, k=1)[0]
+                logging.info(f"[SATpwn] Hopping to weighted-random channel {next_channel} (Mode: {self.mode})")
+
+    def _epoch_loose():
+        if self.memory_is_dirty or not self.channel_stats:
+            self.channel_stats = self._get_channel_stats()
+            self.memory_is_dirty = False
+
+        if random.random() < self.EXPLORATION_PROBABILITY:
+            next_channel = random.choice(supported_channels)
+            logging.info(f"[SATpwn] Exploring random channel {next_channel} (Mode: loose)")
+            agent.set_channel(next_channel)
+            return
+
+        # Weighted selection logic
+        channels = list(self.channel_stats.keys())
+        if not channels:
+            next_channel = random.choice(supported_channels)
+            logging.info(f"[SATpwn] No channel data, hopping to random channel {next_channel}")
+            agent.set_channel(next_channel)
+            return
+
+        weights = []
+        for ch in channels:
+            stats = self.channel_stats.get(ch, {'clients': 0, 'handshakes': 0, 'aps': 0})
+            weight = (stats['clients'] * self.CLIENT_WEIGHT) + (stats['handshakes'] * self.HANDSHAKE_WEIGHT)
+            if stats['aps'] > self.PMKID_FRIENDLY_APS_THRESHOLD and stats['aps'] > stats['clients']:
+                weight *= self.PMKID_FRIENDLY_BOOST_FACTOR
+            weights.append(weight)
+
+        exploration_bonus = 1.0
+        weights = [w + exploration_bonus for w in weights]
+        logging.info("[SATpwn] Applied exploration bonus for loose mode.")
 
         # Filter down to only channels that are supported by the hardware
         supported_channels_with_weights = []
@@ -263,15 +291,37 @@ class SmartAutoTune(plugins.Plugin):
 
         if not supported_channels_with_weights:
             next_channel = random.choice(supported_channels)
-            logging.info(f"[smart_auto_tune] No tracked channels are supported, hopping to random supported channel {next_channel}")
+            logging.info(f"[SATpwn] No tracked channels are supported, hopping to random supported channel {next_channel}")
         else:
             total_weight = sum(supported_weights)
             if total_weight == 0:
                 next_channel = random.choice(supported_channels_with_weights)
-                logging.info(f"[smart_auto_tune] All tracked channel weights are zero, hopping to random tracked/supported channel {next_channel}")
+                logging.info(f"[SATpwn] All tracked channel weights are zero, hopping to random tracked/supported channel {next_channel}")
             else:
                 next_channel = random.choices(supported_channels_with_weights, weights=supported_weights, k=1)[0]
-                logging.info(f"[smart_auto_tune] Hopping to weighted-random channel {next_channel} (Mode: {self.mode})")
+                logging.info(f"[SATpwn] Hopping to weighted-random channel {next_channel} (Mode: {self.mode})")
+
+    def _epoch_driveby():
+        self._epoch_strict() #called strict, as the only diffrence is the varibles. (TODO: add varibles inside of each function)
+
+#code for all of the modes (END)
+    def on_epoch(self, agent, epoch, epoch_data):
+        self._cleanup_memory()
+        if not self.ready:
+            return
+
+        supported_channels = agent.supported_channels()
+        if not supported_channels:
+            logging(f"{supported_channels}")
+            logging.warning("[SATpwn] No supported channels found.")
+            return
+
+        if self.mode == 'loose':
+            self._epoch_loose()
+        elif self.mode == 'drive-by':
+            self._epoch_driveby()
+        else:
+            self._epoch_strict()
 
         agent.set_channel(next_channel)
 
@@ -282,10 +332,12 @@ class SmartAutoTune(plugins.Plugin):
         # Handle mode toggling
         if path == 'toggle_mode':
             current_index = self.modes.index(self.mode)
+            logging.debug(f"current index = {current_index}")
             next_index = (current_index + 1) % len(self.modes)
+            logging.debug(f"next index = {next_index}")
             self.mode = self.modes[next_index]
-            logging.info(f"[smart_auto_tune] Mode changed to {self.mode}")
-            return Response('<html><head><meta http-equiv="refresh" content="0; url=/plugins/smart_auto_tune/" /></head></html>', mimetype='text/html')
+            logging.info(f"[SATpwn] Mode changed to {self.mode}")
+            return Response('<html><head><meta http-equiv="refresh" content="0; url=/plugins/SATpwn/" /></head></html>', mimetype='text/html')
 
         # Main dashboard page
         if path == '/' or not path:
@@ -317,7 +369,7 @@ class SmartAutoTune(plugins.Plugin):
             
             next_mode_index = (self.modes.index(self.mode) + 1) % len(self.modes)
             next_mode_name = self.modes[next_mode_index].capitalize()
-            mode_toggle_button = f"<a href='/plugins/smart_auto_tune/toggle_mode' style='display:inline-block;padding:10px;background-color:#569cd6;color:#fff;text-decoration:none;border-radius:5px;'>Switch to {next_mode_name} Mode</a>"
+            mode_toggle_button = f"<a href='/plugins/SATpwn/toggle_mode' style='display:inline-block;padding:10px;background-color:#569cd6;color:#fff;text-decoration:none;border-radius:5px;'>Switch to {next_mode_name} Mode</a>"
 
             html = f"""
             <html>
