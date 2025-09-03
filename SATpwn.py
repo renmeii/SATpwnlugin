@@ -314,7 +314,7 @@ class SmartAutoTune(plugins.Plugin):
         agent.set_channel(next_channel)
 
     def _epoch_driveby(self, agent, epoch, epoch_data):
-        self._epoch_strict() #called strict, as the only diffrence is the varibles. (TODO: add varibles inside of each function)
+        self._epoch_strict(self, agent, epoch, epoch_data) #called strict, as the only diffrence is the varibles. (TODO: add varibles inside of each function)
 
     def _epoch_recon(self, agent, epoch, epoch_data):
         supported_channels = agent.supported_channels()
@@ -324,6 +324,7 @@ class SmartAutoTune(plugins.Plugin):
             agent.set_channel(reader)
         else:
             #idk what logic to do in order to determine the highest-grossing channel, you know this code better than me.
+            _epoch_strict(self, agent, epoch, epoch_data)
 
 #code for all of the modes (END)
     def on_epoch(self, agent, epoch, epoch_data):
