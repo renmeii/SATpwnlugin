@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 class SmartAutoTune(plugins.Plugin):
-    __author__ = 'Renmeii'
+    __author__ = 'Renmeii x Mr-Cass-Ette'
     __version__ = 'x88.0.1'
     __license__ = 'GPL3'
     __description__ = 'SATpwn, the superior way to capture handshakes '
@@ -38,7 +38,7 @@ class SmartAutoTune(plugins.Plugin):
         self.ready = False
         self.agent = None
         self.memory = {}
-        self.modes = ['strict', 'loose', 'drive-by']
+        self.modes = ['strict', 'loose', 'drive-by', 'recon']
         self.memory_path = '/etc/pwnagotchi/SATpwn_memory.json'
         self.executor = ThreadPoolExecutor(max_workers=5)
         self.mode = self.modes[0]
@@ -208,8 +208,16 @@ class SmartAutoTune(plugins.Plugin):
         
         self.memory_is_dirty = True
 
+    def _number_reader(numbers):
+        """Generator that yields numbers one by one and returns 'end' when done."""
+        for num in numbers:
+            yield num
+        yield "end"
+
+
+
 #code for all of the modes (START)
-    def _epoch_strict():
+    def _epoch_strict(self, agent, epoch, epoch_data):
         if self.memory_is_dirty or not self.channel_stats:
             self.channel_stats = self._get_channel_stats()
             self.memory_is_dirty = False
@@ -249,8 +257,10 @@ class SmartAutoTune(plugins.Plugin):
             else:
                 next_channel = random.choices(supported_channels_with_weights, weights=supported_weights, k=1)[0]
                 logging.info(f"[SATpwn] Hopping to weighted-random channel {next_channel} (Mode: {self.mode})")
+        
+        agent.set_channel(next_channel)
 
-    def _epoch_loose():
+    def _epoch_loose(self, agent, epoch, epoch_data):
         if self.memory_is_dirty or not self.channel_stats:
             self.channel_stats = self._get_channel_stats()
             self.memory_is_dirty = False
@@ -300,9 +310,20 @@ class SmartAutoTune(plugins.Plugin):
             else:
                 next_channel = random.choices(supported_channels_with_weights, weights=supported_weights, k=1)[0]
                 logging.info(f"[SATpwn] Hopping to weighted-random channel {next_channel} (Mode: {self.mode})")
+        
+        agent.set_channel(next_channel)
 
-    def _epoch_driveby():
+    def _epoch_driveby(self, agent, epoch, epoch_data):
         self._epoch_strict() #called strict, as the only diffrence is the varibles. (TODO: add varibles inside of each function)
+
+    def _epoch_recon(self, agent, epoch, epoch_data):
+        supported_channels = agent.supported_channels()
+        reader = self._number_reader(supported_channels)
+        if reader != "end"
+            logging.info(f"[SATpwn] RECON: inspecting channel {reader} and gathering info...")
+            agent.set_channel(reader)
+        else:
+            #idk what logic to do in order to determine the highest-grossing channel, you know this code better than me.
 
 #code for all of the modes (END)
     def on_epoch(self, agent, epoch, epoch_data):
@@ -311,19 +332,29 @@ class SmartAutoTune(plugins.Plugin):
             return
 
         supported_channels = agent.supported_channels()
+        logging.info(f"{supported_channels}")
+
         if not supported_channels:
-            logging(f"{supported_channels}")
+            logging.info(f"{supported_channels}")
             logging.warning("[SATpwn] No supported channels found.")
             return
 
         if self.mode == 'loose':
-            self._epoch_loose()
+            logging.info("Epoch done; loading loose mode")
+            self._epoch_loose(self, agent, epoch, epoch_data)
+            
         elif self.mode == 'drive-by':
-            self._epoch_driveby()
+            logging.info("Epoch done; loading drive-by mode")
+            self._epoch_driveby(self, agent, epoch, epoch_data)
+
+        elif self.mode == 'recon':
+            logging.info("Epoch done; loading recon mode")
+            self._epoch_recon(self, agent, epoch, epoch_data)
+
         else:
+            logging.info("Epoch done; loading strict mode")
             self._epoch_strict()
 
-        agent.set_channel(next_channel)
 
     def on_webhook(self, path, request):
         if not self.ready:
