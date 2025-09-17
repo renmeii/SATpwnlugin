@@ -9,11 +9,19 @@ import os
 import time
 import math
 from concurrent.futures import ThreadPoolExecutor
-import toml
+
+# TOML import with fallback for different Python versions
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    try:
+        import tomli as tomllib  # Fallback for older Python
+    except ImportError:
+        import toml as tomllib  # Alternative fallback
 
 class SATpwn(plugins.Plugin):
     __author__ = 'Renmeii x Mr-Cass-Ette and discoJack too '
-    __version__ = 'x88.0.4-auto-geo'
+    __version__ = 'x88.0.5-auto-geo-fixed'
     __license__ = 'GPL3'
     __description__ = 'SATpwn, the superior way to capture handshakes with auto mode and GPS deadzone'
     
@@ -67,69 +75,151 @@ class SATpwn(plugins.Plugin):
         self._home_anchor_point = None  # (lat, lon) of detected home
         self._movement_start_point = None  # Track movement origin
         
+        logging.info("[SATpwn] Plugin initializing...")
         self._load_home_whitelist()
     
     def _load_home_whitelist(self):
-        """Load home SSID/BSSID whitelist directly from config.toml file."""
+        """Load home SSID/BSSID whitelist with robust TOML parsing and format detection."""
         try:
             config_path = "/etc/pwnagotchi/config.toml"
-            if os.path.exists(config_path):
-                with open(config_path, "r") as f:
-                    conf = toml.load(f)
-                
-                # Get home_whitelist from [main] section
-                home_whitelist = conf.get('main', {}).get('home_whitelist', [])
-                self.home_whitelist = set(home_whitelist)
-                
-                if self.home_whitelist:
-                    logging.info(f"[SATpwn] Loaded home whitelist: {len(self.home_whitelist)} entries")
-                else:
-                    logging.info("[SATpwn] No home whitelist entries found in config")
-            else:
+            logging.debug(f"[SATpwn] Attempting to load config from: {config_path}")
+            
+            if not os.path.exists(config_path):
                 logging.warning(f"[SATpwn] config.toml not found at {config_path}")
                 self.home_whitelist = set()
+                return
+            
+            # Detect TOML library and use appropriate mode
+            try:
+                # Check if this is the built-in tomllib (Python 3.11+) which requires binary mode
+                if hasattr(tomllib, '__name__') and getattr(tomllib, '__name__', '') == 'tomllib':
+                    open_mode = "rb"
+                    logging.debug("[SATpwn] Using tomllib (Python 3.11+) with binary mode")
+                else:
+                    # This is tomli or toml - requires text mode
+                    open_mode = "r"
+                    logging.debug("[SATpwn] Using tomli/toml with text mode")
+                
+                with open(config_path, open_mode) as f:
+                    conf = tomllib.load(f)
+                
+                logging.debug(f"[SATpwn] Config loaded successfully. Top-level keys: {list(conf.keys())}")
+                
+                # Try multiple ways to get the home whitelist
+                home_whitelist = None
+                
+                # Method 1: Flat key format (jayofelony style)
+                if 'main.home_whitelist' in conf:
+                    home_whitelist = conf['main.home_whitelist']
+                    logging.debug("[SATpwn] Found whitelist using flat key 'main.home_whitelist'")
+                
+                # Method 2: Nested table format
+                elif 'main' in conf and isinstance(conf['main'], dict):
+                    main_section = conf['main']
+                    if 'home_whitelist' in main_section:
+                        home_whitelist = main_section['home_whitelist']
+                        logging.debug("[SATpwn] Found whitelist in [main] table under 'home_whitelist'")
+                    elif 'whitelist' in main_section:
+                        home_whitelist = main_section['whitelist']
+                        logging.debug("[SATpwn] Found whitelist in [main] table under 'whitelist'")
+                
+                # Method 3: Direct top-level key
+                elif 'home_whitelist' in conf:
+                    home_whitelist = conf['home_whitelist']
+                    logging.debug("[SATpwn] Found whitelist as top-level 'home_whitelist'")
+                
+                # Process the whitelist data
+                if home_whitelist is not None:
+                    # Handle different data types
+                    if isinstance(home_whitelist, str):
+                        # Split comma-separated string
+                        home_list = [x.strip() for x in home_whitelist.split(',') if x.strip()]
+                        logging.debug(f"[SATpwn] Parsed CSV string into list: {home_list}")
+                    elif isinstance(home_whitelist, list):
+                        home_list = [str(x).strip() for x in home_whitelist if str(x).strip()]
+                        logging.debug(f"[SATpwn] Using list directly: {home_list}")
+                    else:
+                        logging.warning(f"[SATpwn] Unexpected whitelist format: {type(home_whitelist)}")
+                        home_list = []
+                    
+                    if home_list:
+                        self.home_whitelist = set(home_list)
+                        logging.info(f"[SATpwn] Loaded home whitelist: {len(self.home_whitelist)} entries: {self.home_whitelist}")
+                    else:
+                        self.home_whitelist = set()
+                        logging.warning("[SATpwn] Home whitelist was empty after processing")
+                else:
+                    self.home_whitelist = set()
+                    logging.warning("[SATpwn] No home whitelist found in config file")
+                    logging.debug(f"[SATpwn] Available config keys: {list(conf.keys())}")
+                    if 'main' in conf:
+                        logging.debug(f"[SATpwn] Keys in [main] section: {list(conf['main'].keys()) if isinstance(conf['main'], dict) else 'main is not a dict'}")
+                
+            except Exception as parse_error:
+                logging.error(f"[SATpwn] Error parsing TOML config: {parse_error}")
+                self.home_whitelist = set()
+                
         except Exception as e:
-            logging.warning(f"[SATpwn] Could not load home whitelist from config.toml: {e}")
+            logging.error(f"[SATpwn] Could not load home whitelist from config: {e}")
             self.home_whitelist = set()
     
     def _get_gps_from_bettercap(self, agent):
-        """Pull GPS data from bettercap session."""
+        """Pull GPS data from bettercap session with extensive debug logging."""
         try:
             session_info = agent.session()
+            logging.debug(f"[SATpwn] Raw session keys: {list(session_info.keys())}")
+            
             gps_info = session_info.get('gps', {})
+            logging.debug(f"[SATpwn] Raw GPS info: {gps_info}")
             
             # Check if we have valid GPS data
             if gps_info and 'lat' in gps_info and 'lon' in gps_info:
                 lat = float(gps_info['lat'])
                 lon = float(gps_info['lon'])
                 
+                logging.info(f"[SATpwn] GPS coordinates received: lat={lat:.6f}, lon={lon:.6f}")
+                
                 # Skip invalid coordinates (0,0 usually means no fix)
                 if lat == 0.0 and lon == 0.0:
+                    logging.warning("[SATpwn] GPS coordinates are 0,0 - no satellite fix")
                     return None
                     
                 speed = float(gps_info.get('speed', 0))
                 altitude = float(gps_info.get('altitude', 0))
                 
-                return {
+                gps_data = {
                     'lat': lat,
                     'lon': lon,
                     'speed': speed,
                     'altitude': altitude
                 }
+                logging.debug(f"[SATpwn] Returning GPS data: {gps_data}")
+                return gps_data
+            else:
+                logging.warning(f"[SATpwn] No valid GPS data in session. GPS info: {gps_info}")
         except Exception as e:
-            logging.debug(f"[SATpwn] Failed to get GPS from bettercap: {e}")
+            logging.error(f"[SATpwn] Failed to get GPS from bettercap: {e}")
         
         return None
     
     def _update_gps_cache(self, gps_fix):
-        """Update GPS cache with latest fix."""
+        """Update GPS cache with latest fix and extensive debug logging."""
+        logging.info(f"[SATpwn] Updating GPS cache with: {gps_fix}")
         self._last_gps = (time.time(), gps_fix.get('lat', 0), gps_fix.get('lon', 0), gps_fix.get('speed', 0))
+        logging.debug(f"[SATpwn] GPS cache updated: {self._last_gps}")
         
         # Set home anchor point if we detect we're at home and don't have one yet
-        if not self._home_anchor_point and self._home_ssid_visible():
+        home_visible = self._home_ssid_visible()
+        logging.debug(f"[SATpwn] Home anchor check - anchor_exists: {bool(self._home_anchor_point)}, home_visible: {home_visible}")
+        
+        if not self._home_anchor_point and home_visible:
             _, lat, lon, _ = self._last_gps
             self._home_anchor_point = (lat, lon)
-            logging.info(f"[SATpwn] Home anchor point set: {lat:.6f}, {lon:.6f}")
+            logging.info(f"[SATpwn] Home anchor point SET: {lat:.6f}, {lon:.6f}")
+        elif self._home_anchor_point:
+            logging.debug(f"[SATpwn] Home anchor already exists: {self._home_anchor_point}")
+        else:
+            logging.debug("[SATpwn] Home anchor not set - no home SSID visible")
     
     def _calculate_distance(self, lat1, lon1, lat2, lon2):
         """Calculate distance between two GPS points in meters using Haversine formula"""
@@ -159,14 +249,19 @@ class SATpwn(plugins.Plugin):
         _, lat, lon, _ = self._last_gps
         home_lat, home_lon = self._home_anchor_point
         distance = self._calculate_distance(lat, lon, home_lat, home_lon)
-        return distance <= self.HOME_DEADZONE_METERS
+        within_deadzone = distance <= self.HOME_DEADZONE_METERS
+        logging.debug(f"[SATpwn] Deadzone check - distance: {distance:.1f}m, within: {within_deadzone}")
+        return within_deadzone
     
     def _is_stationary(self):
         """Check if device has been stationary for STATIONARY_SECONDS."""
         if not self._last_gps:
             return False
         t, _, _, spd = self._last_gps
-        return (time.time() - t >= self.STATIONARY_SECONDS) and spd < self.MOVE_SPEED_THRESHOLD
+        elapsed = time.time() - t
+        stationary = (elapsed >= self.STATIONARY_SECONDS) and spd < self.MOVE_SPEED_THRESHOLD
+        logging.debug(f"[SATpwn] Stationary check - elapsed: {elapsed:.0f}s, speed: {spd:.1f}m/s, stationary: {stationary}")
+        return stationary
     
     def _is_moving(self):
         """Enhanced movement detection with geographic buffer"""
@@ -194,6 +289,7 @@ class SATpwn(plugins.Plugin):
             if self._last_move_ok == 0:
                 self._last_move_ok = time.time()
             if (time.time() - self._last_move_ok) >= self.MOVE_DEBOUNCE_SECS:
+                logging.debug("[SATpwn] Movement detected: speed + distance + not in deadzone")
                 return True
         else:
             self._last_move_ok = 0
@@ -204,10 +300,24 @@ class SATpwn(plugins.Plugin):
         return False
     
     def _home_ssid_visible(self):
-        """Check if any home SSID/BSSID is currently visible."""
+        """Check if any home SSID/BSSID is currently visible with debug logging."""
+        logging.debug(f"[SATpwn] Checking home whitelist: {self.home_whitelist}")
+        logging.debug(f"[SATpwn] Current memory has {len(self.memory)} APs")
+        
+        if not self.home_whitelist:
+            logging.debug("[SATpwn] Home whitelist is empty")
+            return False
+        
+        visible_ssids = []
         for ap_mac, ap in self.memory.items():
-            if ap.get("ssid") in self.home_whitelist or ap_mac in self.home_whitelist:
+            ssid = ap.get("ssid", "")
+            visible_ssids.append(ssid)
+            if ssid in self.home_whitelist or ap_mac in self.home_whitelist:
+                logging.info(f"[SATpwn] Home SSID detected: '{ssid}' (MAC: {ap_mac})")
                 return True
+        
+        logging.debug(f"[SATpwn] Visible SSIDs: {visible_ssids}")
+        logging.debug("[SATpwn] No home SSID found in current scan")
         return False
     
     def _auto_mode_logic(self):
@@ -216,6 +326,8 @@ class SATpwn(plugins.Plugin):
         home_ssid_visible = self._home_ssid_visible()
         is_stationary = self._is_stationary()
         within_deadzone = self._is_within_home_deadzone()
+        
+        logging.debug(f"[SATpwn] AUTO logic - home_visible: {home_ssid_visible}, stationary: {is_stationary}, deadzone: {within_deadzone}")
         
         if home_ssid_visible or is_stationary or within_deadzone:
             return 'recon'  # when 'home', run recon mapping (passive/compliance behaviors)
@@ -239,7 +351,7 @@ class SATpwn(plugins.Plugin):
             
             with open(self.memory_path, 'w') as f:
                 json.dump(memory_data, f, indent=4)
-            logging.info(f"[SATpwn] Memory and mode '{self.mode}' saved to {self.memory_path}")
+            logging.debug(f"[SATpwn] Memory and mode '{self.mode}' saved to {self.memory_path}")
         except Exception as e:
             logging.error(f"[SATpwn] Error saving memory: {e}")
     
@@ -394,6 +506,8 @@ class SATpwn(plugins.Plugin):
     
     def on_wifi_update(self, agent, access_points):
         now = time.time()
+        logging.debug(f"[SATpwn] WiFi update with {len(access_points)} APs")
+        
         for ap in access_points:
             ap_mac = ap['mac'].lower()
             if ap_mac not in self.memory:
@@ -591,11 +705,13 @@ class SATpwn(plugins.Plugin):
     # Code for all of the modes (END)
     
     def on_epoch(self, agent, epoch, epoch_data):
-        # *** GPS data from bettercap session ***
+        # *** Pull GPS data from bettercap session ***
         gps_data = self._get_gps_from_bettercap(agent)
         if gps_data:
             self._update_gps_cache(gps_data)
             logging.debug(f"[SATpwn] Updated GPS from bettercap: {gps_data['lat']:.6f}, {gps_data['lon']:.6f}, {gps_data['speed']:.1f}m/s")
+        else:
+            logging.debug("[SATpwn] No GPS data received this epoch")
         
         self._cleanup_memory()
         if not self.ready:
