@@ -10,6 +10,15 @@ import time
 import math
 from concurrent.futures import ThreadPoolExecutor
 
+# GPSD import with fallback
+try:
+    import gps
+    GPSD_AVAILABLE = True
+except ImportError:
+    gps = None
+    GPSD_AVAILABLE = False
+    logging.warning("[SATpwn] gpsd-python library not found. GPS features disabled.")
+
 # TOML import with fallback for different Python versions
 try:
     import tomllib  # Python 3.11+
@@ -21,9 +30,9 @@ except ImportError:
 
 class SATpwn(plugins.Plugin):
     __author__ = 'Renmeii x Mr-Cass-Ette and discoJack too '
-    __version__ = 'x88.0.5-auto-geo-fixed'
+    __version__ = 'x88.0.6-auto-geo-gpsd'
     __license__ = 'GPL3'
-    __description__ = 'SATpwn, the superior way to capture handshakes with auto mode and GPS deadzone'
+    __description__ = 'SATpwn with GPSD integration for GPS location-aware operations'
     
     # --- Constants for configuration ---
     AP_EXPIRY_SECONDS = 3600 * 48  # 48 hours
@@ -65,6 +74,9 @@ class SATpwn(plugins.Plugin):
         self.recon_channel_iterator = None
         self.recon_channels_tested = []
         
+        # GPSD session
+        self.gpsd_session = None
+        
         # AUTO mode state
         self._last_gps = None # (time, lat, lon, speed)
         self._last_move_ok = 0
@@ -75,8 +87,9 @@ class SATpwn(plugins.Plugin):
         self._home_anchor_point = None  # (lat, lon) of detected home
         self._movement_start_point = None  # Track movement origin
         
-        logging.info("[SATpwn] Plugin initializing...")
+        logging.info("[SATpwn] Plugin initializing with GPSD client...")
         self._load_home_whitelist()
+        self._init_gpsd()
     
     def _load_home_whitelist(self):
         """Load home SSID/BSSID whitelist with robust TOML parsing and format detection."""
@@ -151,9 +164,6 @@ class SATpwn(plugins.Plugin):
                 else:
                     self.home_whitelist = set()
                     logging.warning("[SATpwn] No home whitelist found in config file")
-                    logging.debug(f"[SATpwn] Available config keys: {list(conf.keys())}")
-                    if 'main' in conf:
-                        logging.debug(f"[SATpwn] Keys in [main] section: {list(conf['main'].keys()) if isinstance(conf['main'], dict) else 'main is not a dict'}")
                 
             except Exception as parse_error:
                 logging.error(f"[SATpwn] Error parsing TOML config: {parse_error}")
@@ -163,42 +173,56 @@ class SATpwn(plugins.Plugin):
             logging.error(f"[SATpwn] Could not load home whitelist from config: {e}")
             self.home_whitelist = set()
     
-    def _get_gps_from_bettercap(self, agent):
-        """Pull GPS data from bettercap session with extensive debug logging."""
+    def _init_gpsd(self):
+        """Initialize GPSD client connection."""
+        if not GPSD_AVAILABLE:
+            logging.error("[SATpwn] GPSD client not available. Install gpsd-clients and python3-gps")
+            return
+        
         try:
-            session_info = agent.session()
-            logging.debug(f"[SATpwn] Raw session keys: {list(session_info.keys())}")
-            
-            gps_info = session_info.get('gps', {})
-            logging.debug(f"[SATpwn] Raw GPS info: {gps_info}")
-            
-            # Check if we have valid GPS data
-            if gps_info and 'lat' in gps_info and 'lon' in gps_info:
-                lat = float(gps_info['lat'])
-                lon = float(gps_info['lon'])
-                
-                logging.info(f"[SATpwn] GPS coordinates received: lat={lat:.6f}, lon={lon:.6f}")
-                
-                # Skip invalid coordinates (0,0 usually means no fix)
-                if lat == 0.0 and lon == 0.0:
-                    logging.warning("[SATpwn] GPS coordinates are 0,0 - no satellite fix")
-                    return None
-                    
-                speed = float(gps_info.get('speed', 0))
-                altitude = float(gps_info.get('altitude', 0))
-                
-                gps_data = {
-                    'lat': lat,
-                    'lon': lon,
-                    'speed': speed,
-                    'altitude': altitude
-                }
-                logging.debug(f"[SATpwn] Returning GPS data: {gps_data}")
-                return gps_data
-            else:
-                logging.warning(f"[SATpwn] No valid GPS data in session. GPS info: {gps_info}")
+            # Connect to GPSD daemon
+            self.gpsd_session = gps.gps(mode=gps.WATCH_ENABLE | gps.WATCH_NEWSTYLE)
+            logging.info("[SATpwn] GPSD client connected successfully")
         except Exception as e:
-            logging.error(f"[SATpwn] Failed to get GPS from bettercap: {e}")
+            logging.error(f"[SATpwn] Failed to connect to GPSD: {e}")
+            self.gpsd_session = None
+    
+    def _get_gps_from_gpsd(self):
+        """Get GPS fix from GPSD daemon."""
+        if self.gpsd_session is None:
+            return None
+        
+        try:
+            # Check if there's data available (non-blocking)
+            if self.gpsd_session.waiting():
+                report = self.gpsd_session.next()
+                
+                # Process TPV (Time-Position-Velocity) reports
+                if report['class'] == 'TPV':
+                    lat = getattr(report, 'lat', None)
+                    lon = getattr(report, 'lon', None)
+                    
+                    if lat is not None and lon is not None:
+                        speed = getattr(report, 'speed', 0)  # m/s
+                        altitude = getattr(report, 'alt', 0)
+                        
+                        gps_data = {
+                            'lat': lat,
+                            'lon': lon,
+                            'speed': speed,
+                            'altitude': altitude
+                        }
+                        
+                        logging.debug(f"[SATpwn] GPS fix from GPSD: {gps_data}")
+                        return gps_data
+            
+        except StopIteration:
+            # No data available
+            pass
+        except Exception as e:
+            logging.error(f"[SATpwn] Error reading from GPSD: {e}")
+            # Try to reconnect
+            self._init_gpsd()
         
         return None
     
@@ -484,6 +508,12 @@ class SATpwn(plugins.Plugin):
     
     def on_unload(self, ui):
         self._save_memory()  # This now also saves the current mode
+        if self.gpsd_session:
+            try:
+                self.gpsd_session.close()
+                logging.info("[SATpwn] GPSD session closed")
+            except:
+                pass
         self.executor.shutdown(wait=False)
         logging.info("[SATpwn] plugin unloaded")
     
@@ -705,13 +735,13 @@ class SATpwn(plugins.Plugin):
     # Code for all of the modes (END)
     
     def on_epoch(self, agent, epoch, epoch_data):
-        # *** Pull GPS data from bettercap session ***
-        gps_data = self._get_gps_from_bettercap(agent)
+        # *** Pull GPS data from GPSD ***
+        gps_data = self._get_gps_from_gpsd()
         if gps_data:
             self._update_gps_cache(gps_data)
-            logging.debug(f"[SATpwn] Updated GPS from bettercap: {gps_data['lat']:.6f}, {gps_data['lon']:.6f}, {gps_data['speed']:.1f}m/s")
+            logging.debug(f"[SATpwn] Updated GPS from GPSD: {gps_data['lat']:.6f}, {gps_data['lon']:.6f}, {gps_data['speed']:.1f}m/s")
         else:
-            logging.debug("[SATpwn] No GPS data received this epoch")
+            logging.debug("[SATpwn] No GPS data received from GPSD this epoch")
         
         self._cleanup_memory()
         if not self.ready:
@@ -840,6 +870,8 @@ class SATpwn(plugins.Plugin):
                     home_lat, home_lon = self._home_anchor_point
                     home_anchor_info = f"Lat: {home_lat:.6f}, Lon: {home_lon:.6f}"
                 
+                gpsd_status = "Connected" if self.gpsd_session else "Disconnected"
+                
                 auto_status = f"""
                 <p><b>AUTO Sub-Mode:</b> {current_sub.upper()}</p>
                 <p><b>Home SSID Visible:</b> {'Yes' if home_visible else 'No'}</p>
@@ -847,6 +879,7 @@ class SATpwn(plugins.Plugin):
                 <p><b>Moving:</b> {'Yes' if is_moving else 'No'}</p>
                 <p><b>Within Home Deadzone:</b> {'Yes' if within_deadzone else 'No'}</p>
                 <p><b>Home Whitelist:</b> {len(self.home_whitelist)} entries</p>
+                <p><b>GPSD Status:</b> {gpsd_status}</p>
                 <p><b>GPS:</b> {gps_info}</p>
                 <p><b>Home Anchor:</b> {home_anchor_info}</p>
                 """
