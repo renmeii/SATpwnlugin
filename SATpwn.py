@@ -9,6 +9,7 @@ import os
 import time
 import math
 from concurrent.futures import ThreadPoolExecutor
+import toml
 
 class SATpwn(plugins.Plugin):
     __author__ = 'Renmeii x Mr-Cass-Ette and discoJack too '
@@ -69,16 +70,26 @@ class SATpwn(plugins.Plugin):
         self._load_home_whitelist()
     
     def _load_home_whitelist(self):
-        """Load home SSID/BSSID whitelist from pwnagotchi config."""
+        """Load home SSID/BSSID whitelist directly from config.toml file."""
         try:
-            # Try to import pwnagotchi config - adjust path as needed
-            import pwnagotchi.config as config
-            conf = config.config
-            self.home_whitelist = set(conf.get('main', {}).get("home_whitelist", []))
-            if self.home_whitelist:
-                logging.info(f"[SATpwn] Loaded home whitelist: {len(self.home_whitelist)} entries")
+            config_path = "/etc/pwnagotchi/config.toml"
+            if os.path.exists(config_path):
+                with open(config_path, "r") as f:
+                    conf = toml.load(f)
+                
+                # Get home_whitelist from [main] section
+                home_whitelist = conf.get('main', {}).get('home_whitelist', [])
+                self.home_whitelist = set(home_whitelist)
+                
+                if self.home_whitelist:
+                    logging.info(f"[SATpwn] Loaded home whitelist: {len(self.home_whitelist)} entries")
+                else:
+                    logging.info("[SATpwn] No home whitelist entries found in config")
+            else:
+                logging.warning(f"[SATpwn] config.toml not found at {config_path}")
+                self.home_whitelist = set()
         except Exception as e:
-            logging.warning(f"[SATpwn] Could not load home whitelist from config: {e}")
+            logging.warning(f"[SATpwn] Could not load home whitelist from config.toml: {e}")
             self.home_whitelist = set()
     
     def _get_gps_from_bettercap(self, agent):
@@ -580,7 +591,7 @@ class SATpwn(plugins.Plugin):
     # Code for all of the modes (END)
     
     def on_epoch(self, agent, epoch, epoch_data):
-        # *** NEW: Pull GPS data from bettercap session ***
+        # *** GPS data from bettercap session ***
         gps_data = self._get_gps_from_bettercap(agent)
         if gps_data:
             self._update_gps_cache(gps_data)
