@@ -81,6 +81,35 @@ class SATpwn(plugins.Plugin):
             logging.warning(f"[SATpwn] Could not load home whitelist from config: {e}")
             self.home_whitelist = set()
     
+    def _get_gps_from_bettercap(self, agent):
+        """Pull GPS data from bettercap session."""
+        try:
+            session_info = agent.session()
+            gps_info = session_info.get('gps', {})
+            
+            # Check if we have valid GPS data
+            if gps_info and 'lat' in gps_info and 'lon' in gps_info:
+                lat = float(gps_info['lat'])
+                lon = float(gps_info['lon'])
+                
+                # Skip invalid coordinates (0,0 usually means no fix)
+                if lat == 0.0 and lon == 0.0:
+                    return None
+                    
+                speed = float(gps_info.get('speed', 0))
+                altitude = float(gps_info.get('altitude', 0))
+                
+                return {
+                    'lat': lat,
+                    'lon': lon,
+                    'speed': speed,
+                    'altitude': altitude
+                }
+        except Exception as e:
+            logging.debug(f"[SATpwn] Failed to get GPS from bettercap: {e}")
+        
+        return None
+    
     def _update_gps_cache(self, gps_fix):
         """Update GPS cache with latest fix."""
         self._last_gps = (time.time(), gps_fix.get('lat', 0), gps_fix.get('lon', 0), gps_fix.get('speed', 0))
@@ -421,10 +450,6 @@ class SATpwn(plugins.Plugin):
         
         self.memory_is_dirty = True
     
-    def on_gps_fix(self, gps_coordinates):
-        """Interface for GPS plugin (expects dict: {'lat':..., 'lon':..., 'speed':...})"""
-        self._update_gps_cache(gps_coordinates)
-    
     # Code for all of the modes (START)
     def _epoch_strict(self, agent, epoch, epoch_data, supported_channels):
         if self.memory_is_dirty or not self.channel_stats:
@@ -555,6 +580,12 @@ class SATpwn(plugins.Plugin):
     # Code for all of the modes (END)
     
     def on_epoch(self, agent, epoch, epoch_data):
+        # *** NEW: Pull GPS data from bettercap session ***
+        gps_data = self._get_gps_from_bettercap(agent)
+        if gps_data:
+            self._update_gps_cache(gps_data)
+            logging.debug(f"[SATpwn] Updated GPS from bettercap: {gps_data['lat']:.6f}, {gps_data['lon']:.6f}, {gps_data['speed']:.1f}m/s")
+        
         self._cleanup_memory()
         if not self.ready:
             return Response("Plugin not ready yet.", mimetype='text/html')
