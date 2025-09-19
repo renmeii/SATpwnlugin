@@ -7,17 +7,7 @@ import random
 import json
 import os
 import time
-import math
 from concurrent.futures import ThreadPoolExecutor
-
-# GPSD import with fallback
-try:
-    import gps
-    GPSD_AVAILABLE = True
-except ImportError:
-    gps = None
-    GPSD_AVAILABLE = False
-    logging.warning("[SATpwn] gpsd-python library not found. GPS features disabled.")
 
 # TOML import with fallback for different Python versions
 try:
@@ -30,9 +20,9 @@ except ImportError:
 
 class SATpwn(plugins.Plugin):
     __author__ = 'Renmeii x Mr-Cass-Ette and discoJack too '
-    __version__ = 'x88.0.6-auto-geo-gpsd'
+    __version__ = 'x88.0.7-no-gps'
     __license__ = 'GPL3'
-    __description__ = 'SATpwn with GPSD integration for GPS location-aware operations'
+    __description__ = 'SATpwn intelligent targeting system without GPS dependencies'
     
     # --- Constants for configuration ---
     AP_EXPIRY_SECONDS = 3600 * 48  # 48 hours
@@ -52,14 +42,10 @@ class SATpwn(plugins.Plugin):
     DRIVE_BY_ATTACK_SCORE_THRESHOLD = 20 # Lower score threshold
     DRIVE_BY_ATTACK_COOLDOWN_SECONDS = 60  # 1 minute
     
-    # AUTO Mode constants
-    STATIONARY_SECONDS = 3600      # 1 hour to trigger "recon" (passive/compliance)
-    MOVE_SPEED_THRESHOLD = 0.5     # meters/second (for mobile detection)
-    MOVE_DEBOUNCE_SECS = 20
-    
-    # GPS Deadzone constants
-    HOME_DEADZONE_METERS = 6.0     # ~20ft buffer zone
-    MOVEMENT_DISTANCE_THRESHOLD = 20.0  # Must move 20m+ to be "moving"
+    # AUTO Mode constants (activity-based since no GPS)
+    STATIONARY_SECONDS = 3600      # 1 hour to trigger "recon" mode
+    ACTIVITY_THRESHOLD = 5         # Number of new APs to consider "moving"
+    ACTIVITY_WINDOW_SECONDS = 300  # 5 minutes window for activity detection
     
     def __init__(self):
         self.ready = False
@@ -74,22 +60,15 @@ class SATpwn(plugins.Plugin):
         self.recon_channel_iterator = None
         self.recon_channels_tested = []
         
-        # GPSD session
-        self.gpsd_session = None
-        
-        # AUTO mode state
-        self._last_gps = None # (time, lat, lon, speed)
-        self._last_move_ok = 0
+        # AUTO mode state (activity-based without GPS)
+        self._last_activity_check = 0
+        self._activity_history = []  # Track AP discoveries over time
         self.home_whitelist = set()
         self._current_auto_submode = None  # Track what AUTO is currently running
+        self._stationary_start = None  # When we first detected stationary state
         
-        # GPS Deadzone state
-        self._home_anchor_point = None  # (lat, lon) of detected home
-        self._movement_start_point = None  # Track movement origin
-        
-        logging.info("[SATpwn] Plugin initializing with GPSD client...")
+        logging.info("[SATpwn] Plugin initializing without GPS dependencies...")
         self._load_home_whitelist()
-        self._init_gpsd()
     
     def _load_home_whitelist(self):
         """Load home SSID/BSSID whitelist with robust TOML parsing and format detection."""
@@ -173,155 +152,53 @@ class SATpwn(plugins.Plugin):
             logging.error(f"[SATpwn] Could not load home whitelist from config: {e}")
             self.home_whitelist = set()
     
-    def _init_gpsd(self):
-        """Initialize GPSD client connection."""
-        if not GPSD_AVAILABLE:
-            logging.error("[SATpwn] GPSD client not available. Install gpsd-clients and python3-gps")
-            return
+    def _update_activity_history(self, new_ap_count):
+        """Track AP discovery activity over time for movement detection."""
+        now = time.time()
+        self._activity_history.append((now, new_ap_count))
         
-        try:
-            # Connect to GPSD daemon
-            self.gpsd_session = gps.gps(mode=gps.WATCH_ENABLE | gps.WATCH_NEWSTYLE)
-            logging.info("[SATpwn] GPSD client connected successfully")
-        except Exception as e:
-            logging.error(f"[SATpwn] Failed to connect to GPSD: {e}")
-            self.gpsd_session = None
-    
-    def _get_gps_from_gpsd(self):
-        """Get GPS fix from GPSD daemon."""
-        if self.gpsd_session is None:
-            return None
-        
-        try:
-            # Check if there's data available (non-blocking)
-            if self.gpsd_session.waiting():
-                report = self.gpsd_session.next()
-                
-                # Process TPV (Time-Position-Velocity) reports
-                if report['class'] == 'TPV':
-                    lat = getattr(report, 'lat', None)
-                    lon = getattr(report, 'lon', None)
-                    
-                    if lat is not None and lon is not None:
-                        speed = getattr(report, 'speed', 0)  # m/s
-                        altitude = getattr(report, 'alt', 0)
-                        
-                        gps_data = {
-                            'lat': lat,
-                            'lon': lon,
-                            'speed': speed,
-                            'altitude': altitude
-                        }
-                        
-                        logging.debug(f"[SATpwn] GPS fix from GPSD: {gps_data}")
-                        return gps_data
-            
-        except StopIteration:
-            # No data available
-            pass
-        except Exception as e:
-            logging.error(f"[SATpwn] Error reading from GPSD: {e}")
-            # Try to reconnect
-            self._init_gpsd()
-        
-        return None
-    
-    def _update_gps_cache(self, gps_fix):
-        """Update GPS cache with latest fix and extensive debug logging."""
-        logging.info(f"[SATpwn] Updating GPS cache with: {gps_fix}")
-        self._last_gps = (time.time(), gps_fix.get('lat', 0), gps_fix.get('lon', 0), gps_fix.get('speed', 0))
-        logging.debug(f"[SATpwn] GPS cache updated: {self._last_gps}")
-        
-        # Set home anchor point if we detect we're at home and don't have one yet
-        home_visible = self._home_ssid_visible()
-        logging.debug(f"[SATpwn] Home anchor check - anchor_exists: {bool(self._home_anchor_point)}, home_visible: {home_visible}")
-        
-        if not self._home_anchor_point and home_visible:
-            _, lat, lon, _ = self._last_gps
-            self._home_anchor_point = (lat, lon)
-            logging.info(f"[SATpwn] Home anchor point SET: {lat:.6f}, {lon:.6f}")
-        elif self._home_anchor_point:
-            logging.debug(f"[SATpwn] Home anchor already exists: {self._home_anchor_point}")
-        else:
-            logging.debug("[SATpwn] Home anchor not set - no home SSID visible")
-    
-    def _calculate_distance(self, lat1, lon1, lat2, lon2):
-        """Calculate distance between two GPS points in meters using Haversine formula"""
-        if lat1 == 0 and lon1 == 0:  # Invalid GPS coordinates
-            return float('inf')
-        if lat2 == 0 and lon2 == 0:  # Invalid GPS coordinates
-            return float('inf')
-            
-        # Convert latitude and longitude from degrees to radians
-        lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-        
-        # Haversine formula
-        dlat = lat2 - lat1
-        dlon = lon2 - lon1
-        a = math.sin(dlat/2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon/2)**2
-        c = 2 * math.asin(math.sqrt(a))
-        
-        # Radius of earth in meters
-        r = 6371000
-        
-        return c * r
-    
-    def _is_within_home_deadzone(self):
-        """Check if current position is within home deadzone buffer"""
-        if not self._last_gps or not self._home_anchor_point:
-            return False
-        _, lat, lon, _ = self._last_gps
-        home_lat, home_lon = self._home_anchor_point
-        distance = self._calculate_distance(lat, lon, home_lat, home_lon)
-        within_deadzone = distance <= self.HOME_DEADZONE_METERS
-        logging.debug(f"[SATpwn] Deadzone check - distance: {distance:.1f}m, within: {within_deadzone}")
-        return within_deadzone
+        # Clean old entries outside the activity window
+        cutoff = now - self.ACTIVITY_WINDOW_SECONDS
+        self._activity_history = [(t, count) for t, count in self._activity_history if t > cutoff]
     
     def _is_stationary(self):
-        """Check if device has been stationary for STATIONARY_SECONDS."""
-        if not self._last_gps:
+        """Check if device appears stationary based on AP discovery patterns."""
+        now = time.time()
+        
+        # Calculate recent AP discovery rate
+        recent_activity = sum(count for t, count in self._activity_history 
+                             if now - t <= self.ACTIVITY_WINDOW_SECONDS)
+        
+        # Low activity suggests stationary behavior
+        low_activity = recent_activity < self.ACTIVITY_THRESHOLD
+        
+        if low_activity:
+            if self._stationary_start is None:
+                self._stationary_start = now
+                logging.debug("[SATpwn] Stationary state detected - starting timer")
+            
+            elapsed = now - self._stationary_start
+            stationary = elapsed >= self.STATIONARY_SECONDS
+            logging.debug(f"[SATpwn] Stationary check - elapsed: {elapsed:.0f}s, stationary: {stationary}")
+            return stationary
+        else:
+            # Reset stationary timer if we see activity
+            if self._stationary_start is not None:
+                logging.debug("[SATpwn] Activity detected - resetting stationary timer")
+                self._stationary_start = None
             return False
-        t, _, _, spd = self._last_gps
-        elapsed = time.time() - t
-        stationary = (elapsed >= self.STATIONARY_SECONDS) and spd < self.MOVE_SPEED_THRESHOLD
-        logging.debug(f"[SATpwn] Stationary check - elapsed: {elapsed:.0f}s, speed: {spd:.1f}m/s, stationary: {stationary}")
-        return stationary
     
     def _is_moving(self):
-        """Enhanced movement detection with geographic buffer"""
-        if not self._last_gps:
-            return False
+        """Detect movement based on high AP discovery rate."""
+        now = time.time()
         
-        # Speed-based check (existing logic)
-        t, lat, lon, spd = self._last_gps
-        speed_moving = spd >= self.MOVE_SPEED_THRESHOLD
+        # Calculate recent AP discovery rate
+        recent_activity = sum(count for t, count in self._activity_history 
+                             if now - t <= self.ACTIVITY_WINDOW_SECONDS)
         
-        # Distance-based check (new logic)
-        if self._movement_start_point:
-            start_lat, start_lon = self._movement_start_point
-            distance_moved = self._calculate_distance(lat, lon, start_lat, start_lon)
-            distance_moving = distance_moved >= self.MOVEMENT_DISTANCE_THRESHOLD
-        else:
-            distance_moving = False
-            self._movement_start_point = (lat, lon)
-        
-        # Check if we're within home deadzone
-        within_home_deadzone = self._is_within_home_deadzone()
-        
-        # Combine conditions - must be moving by speed AND distance, and NOT in home deadzone
-        if speed_moving and distance_moving and not within_home_deadzone:
-            if self._last_move_ok == 0:
-                self._last_move_ok = time.time()
-            if (time.time() - self._last_move_ok) >= self.MOVE_DEBOUNCE_SECS:
-                logging.debug("[SATpwn] Movement detected: speed + distance + not in deadzone")
-                return True
-        else:
-            self._last_move_ok = 0
-            # Reset movement start point if we're not moving
-            if not speed_moving:
-                self._movement_start_point = (lat, lon)
-                
-        return False
+        moving = recent_activity >= self.ACTIVITY_THRESHOLD
+        logging.debug(f"[SATpwn] Movement check - recent_activity: {recent_activity}, moving: {moving}")
+        return moving
     
     def _home_ssid_visible(self):
         """Check if any home SSID/BSSID is currently visible with debug logging."""
@@ -345,18 +222,20 @@ class SATpwn(plugins.Plugin):
         return False
     
     def _auto_mode_logic(self):
-        """Decide sub-mode based on GPS & SSID visibility."""
-        # Enhanced logic with deadzone consideration
+        """Decide sub-mode based on activity patterns and SSID visibility."""
         home_ssid_visible = self._home_ssid_visible()
         is_stationary = self._is_stationary()
-        within_deadzone = self._is_within_home_deadzone()
+        is_moving = self._is_moving()
         
-        logging.debug(f"[SATpwn] AUTO logic - home_visible: {home_ssid_visible}, stationary: {is_stationary}, deadzone: {within_deadzone}")
+        logging.debug(f"[SATpwn] AUTO logic - home_visible: {home_ssid_visible}, stationary: {is_stationary}, moving: {is_moving}")
         
-        if home_ssid_visible or is_stationary or within_deadzone:
-            return 'recon'  # when 'home', run recon mapping (passive/compliance behaviors)
-        if self._is_moving():
-            return 'drive-by'
+        # Priority: Home > Stationary > Moving > Default
+        if home_ssid_visible or is_stationary:
+            return 'recon'  # Passive behavior when at home or stationary
+        if is_moving:
+            return 'drive-by'  # Aggressive mobile targeting
+        
+        # Default based on AP count
         return 'loose' if len(self.memory) < 10 else 'strict'
         
     def _save_memory(self):
@@ -368,7 +247,7 @@ class SATpwn(plugins.Plugin):
                     "current_mode": self.mode,
                     "last_saved": time.time(),
                     "version": self.__version__,
-                    "home_anchor_point": self._home_anchor_point
+                    "stationary_start": self._stationary_start
                 },
                 "ap_data": self.memory
             }
@@ -401,10 +280,10 @@ class SATpwn(plugins.Plugin):
                         logging.warning(f"[SATpwn] Invalid saved mode '{saved_mode}', using default: {self.modes[0]}")
                         self.mode = self.modes[0]
                     
-                    # Restore home anchor point if available
-                    self._home_anchor_point = metadata.get("home_anchor_point", None)
-                    if self._home_anchor_point:
-                        logging.info(f"[SATpwn] Restored home anchor point: {self._home_anchor_point}")
+                    # Restore stationary timer if available
+                    self._stationary_start = metadata.get("stationary_start", None)
+                    if self._stationary_start:
+                        logging.info(f"[SATpwn] Restored stationary timer")
                     
                     last_saved = metadata.get("last_saved", 0)
                     time_diff = time.time() - last_saved
@@ -508,12 +387,6 @@ class SATpwn(plugins.Plugin):
     
     def on_unload(self, ui):
         self._save_memory()  # This now also saves the current mode
-        if self.gpsd_session:
-            try:
-                self.gpsd_session.close()
-                logging.info("[SATpwn] GPSD session closed")
-            except:
-                pass
         self.executor.shutdown(wait=False)
         logging.info("[SATpwn] plugin unloaded")
     
@@ -536,11 +409,13 @@ class SATpwn(plugins.Plugin):
     
     def on_wifi_update(self, agent, access_points):
         now = time.time()
+        new_ap_count = 0
         logging.debug(f"[SATpwn] WiFi update with {len(access_points)} APs")
         
         for ap in access_points:
             ap_mac = ap['mac'].lower()
             if ap_mac not in self.memory:
+                new_ap_count += 1
                 self.memory[ap_mac] = {
                     "ssid": ap['hostname'], 
                     "channel": ap['channel'], 
@@ -591,6 +466,8 @@ class SATpwn(plugins.Plugin):
                     client_data['last_attempt'] = now
                     self.executor.submit(self._execute_attack, agent, ap_mac, client_mac)
         
+        # Update activity history for AUTO mode
+        self._update_activity_history(new_ap_count)
         self.memory_is_dirty = True
     
     def on_handshake(self, agent, filename, ap, client):
@@ -735,14 +612,6 @@ class SATpwn(plugins.Plugin):
     # Code for all of the modes (END)
     
     def on_epoch(self, agent, epoch, epoch_data):
-        # *** Pull GPS data from GPSD ***
-        gps_data = self._get_gps_from_gpsd()
-        if gps_data:
-            self._update_gps_cache(gps_data)
-            logging.debug(f"[SATpwn] Updated GPS from GPSD: {gps_data['lat']:.6f}, {gps_data['lon']:.6f}, {gps_data['speed']:.1f}m/s")
-        else:
-            logging.debug("[SATpwn] No GPS data received from GPSD this epoch")
-        
         self._cleanup_memory()
         if not self.ready:
             return Response("Plugin not ready yet.", mimetype='text/html')
@@ -850,38 +719,24 @@ class SATpwn(plugins.Plugin):
                 total_channels = len(self.agent.supported_channels()) if self.agent else 0
                 recon_status = f"<p><b>Recon Progress:</b> {channels_tested}/{total_channels} channels surveyed</p>"
             
-            # Add AUTO mode status with enhanced GPS info
+            # Add AUTO mode status (without GPS info)
             auto_status = ""
             if self.mode == 'auto':
                 home_visible = self._home_ssid_visible()
                 is_stationary = self._is_stationary()
                 is_moving = self._is_moving()
-                within_deadzone = self._is_within_home_deadzone()
                 current_sub = self._current_auto_submode or "determining..."
                 
-                # GPS info
-                gps_info = "No GPS data"
-                if self._last_gps:
-                    _, lat, lon, spd = self._last_gps
-                    gps_info = f"Lat: {lat:.6f}, Lon: {lon:.6f}, Speed: {spd:.1f}m/s"
-                
-                home_anchor_info = "Not set"
-                if self._home_anchor_point:
-                    home_lat, home_lon = self._home_anchor_point
-                    home_anchor_info = f"Lat: {home_lat:.6f}, Lon: {home_lon:.6f}"
-                
-                gpsd_status = "Connected" if self.gpsd_session else "Disconnected"
+                recent_activity = sum(count for t, count in self._activity_history 
+                                    if time.time() - t <= self.ACTIVITY_WINDOW_SECONDS)
                 
                 auto_status = f"""
                 <p><b>AUTO Sub-Mode:</b> {current_sub.upper()}</p>
                 <p><b>Home SSID Visible:</b> {'Yes' if home_visible else 'No'}</p>
                 <p><b>Stationary (1hr):</b> {'Yes' if is_stationary else 'No'}</p>
                 <p><b>Moving:</b> {'Yes' if is_moving else 'No'}</p>
-                <p><b>Within Home Deadzone:</b> {'Yes' if within_deadzone else 'No'}</p>
+                <p><b>Recent Activity:</b> {recent_activity} new APs (5min)</p>
                 <p><b>Home Whitelist:</b> {len(self.home_whitelist)} entries</p>
-                <p><b>GPSD Status:</b> {gpsd_status}</p>
-                <p><b>GPS:</b> {gps_info}</p>
-                <p><b>Home Anchor:</b> {home_anchor_info}</p>
                 """
             
             html = f"""
