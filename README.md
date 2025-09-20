@@ -16,7 +16,7 @@ This plugin was built to be a custom, lightweight alternative to other advanced 
     -   **Auto:** An advanced mode. It automatically switches between `recon`, `drive-by`, and `strict`/`loose` modes based on what the device sees, or it's activity.
 -   **On-Screen Display:** Shows the current operating mode directly on the Pwnagotchi's e-ink screen for at-a-glance status awareness.
 -   **Performance Optimized:** Caching layers and calculation throttling have been implemented to reduce CPU load and ensure the plugin runs smoothly on all Raspberry Pi models.
--   **Persistent Memory:** Remembers all seen access points, clients, and the home anchor point across restarts by saving its memory to a JSON file.
+-   **Persistent Memory:** Remembers all seen access points and clients by saving its memory to a JSON file.
 -   **Tactical Dashboard:** A comprehensive web UI to monitor the plugin's status, live stats, channel weights, and a detailed view of the AP/client memory. The dashboard also displays live GPS data.
 -   **Exclusive Mode:** "main.disable_defaults = true" to ensure SATpwn is tthe only scanning and attack logic!
 ## How It Works
