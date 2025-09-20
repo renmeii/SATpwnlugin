@@ -13,7 +13,7 @@ This plugin was built to be a custom, lightweight alternative to other advanced 
     -   **Loose:** A balanced mode that adds an exploration bonus to all channels, preventing over-focusing and allowing for discovery of new networks. It also has a small chance to jump to a completely random channel.
     -   **Drive-by:** A high-aggression mode designed for mobile use (e.g., walking, cycling, driving). It uses shorter memory expiry times and more frequent, lower-threshold attacks to maximize handshake capture opportunities in a rapidly changing environment.
     -   **Recon:** A passive mode for mapping out the Wi-Fi environment. It systematically cycles through all supported channels to gather intelligence without performing any attacks.
-    -   **Auto:** An advanced mode. It automatically switches between `recon`, `drive-by`, and `strict`/`loose` modes based on the device's location and movement.
+    -   **Auto:** An advanced mode. It automatically switches between `recon`, `drive-by`, and `strict`/`loose` modes based on what the device sees, or it's activity.
 -   **On-Screen Display:** Shows the current operating mode directly on the Pwnagotchi's e-ink screen for at-a-glance status awareness.
 -   **Performance Optimized:** Caching layers and calculation throttling have been implemented to reduce CPU load and ensure the plugin runs smoothly on all Raspberry Pi models.
 -   **Persistent Memory:** Remembers all seen access points, clients, and the home anchor point across restarts by saving its memory to a JSON file.
