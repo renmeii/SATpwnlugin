@@ -22,7 +22,7 @@ This plugin was built to be a custom, lightweight alternative to other advanced 
 -   **Performance Optimized:** Caching layers and calculation throttling have been implemented to reduce CPU load and ensure the plugin runs smoothly on all Raspberry Pi models.
 -   **Persistent Memory:** Remembers all seen access points, clients, and the home anchor point across restarts by saving its memory to a JSON file.
 -   **Tactical Dashboard:** A comprehensive web UI to monitor the plugin's status, live stats, channel weights, and a detailed view of the AP/client memory. The dashboard also displays live GPS data.
-
+-   **Exclusive Mode:** "main.disable_defaults = true" to ensure SATpwn is tthe only scanning logic!
 ## How It Works
 
 ### 1. AP & Client Memory
@@ -52,7 +52,8 @@ You can cycle through the modes by clicking the "Switch to..." button on the web
 1.  Place the `SATpwn.py` file into your Pwnagotchi's custom plugin directory (this is usually `/usr/local/share/pwnagotchi/custom-plugins/`).
 2.  Open your `config.toml` file and add the following line under the `main.plugins` section:
     ```toml
-    main.plugins.SATpwn.enabled = true
+    main.plugins.SATpwn = true
+    main.disable_defaults = true -- seet this to true so SATpwn is the only scanning and running attack logic.
     ```
 3.  To use the home detection features, you must add your home SSIDs to the `main.home_whitelist` list in your `config.toml`:
     ```toml
