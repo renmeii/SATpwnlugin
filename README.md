@@ -2,7 +2,7 @@
 
 The SATpwn plugin is an advanced tool for Pwnagotchi that replaces the default decision-making process with an intelligent, adaptive learning system. It uses a client scoring system to focus on high-value targets and a history-based, weighted algorithm to select the most productive Wi-Fi channels.
 
-This plugin was built to be a custom, lightweight alternative to other advanced plugins, focusing on efficient channel hopping and tactical client selection. It now features multiple operating modes to adapt to different environments, from stationary analysis to mobile handshake capture, and includes a sophisticated "auto" mode that uses GPS data to make intelligent decisions.
+This plugin was built to be a custom, lightweight alternative to other advanced plugins, focusing on efficient channel hopping and tactical client selection. It now features multiple operating modes to adapt to different environments, from stationary analysis to mobile handshake capture, and includes a sophisticated "auto" mode that determines activity to make intelligent decisions.
 
 ## Features
 
