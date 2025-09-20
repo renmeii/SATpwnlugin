@@ -8,44 +8,40 @@ import json
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-
-# TOML import with fallback for different Python versions
 try:
-    import tomllib  # Python 3.11+
+    import tomllib
 except ImportError:
     try:
-        import tomli as tomllib  # Fallback for older Python
+        import tomli as tomllib
     except ImportError:
-        import toml as tomllib  # Alternative fallback
+        import toml as tomllib
 
 class SATpwn(plugins.Plugin):
     __author__ = 'Renmeii x Mr-Cass-Ette and discoJack too '
-    __version__ = 'x88.0.7-no-gps'
+    __version__ = 'x88.0.8'
     __license__ = 'GPL3'
-    __description__ = 'SATpwn intelligent targeting system without GPS dependencies'
+    __description__ = 'SATpwn intelligent targeting system'
     
-    # --- Constants for configuration ---
-    AP_EXPIRY_SECONDS = 3600 * 48  # 48 hours
-    CLIENT_EXPIRY_SECONDS = 3600 * 24  # 24 hours
+    AP_EXPIRY_SECONDS = 3600 * 48
+    CLIENT_EXPIRY_SECONDS = 3600 * 24
     ATTACK_SCORE_THRESHOLD = 50
-    ATTACK_COOLDOWN_SECONDS = 300  # 5 minutes
-    SUCCESS_BONUS_DURATION_SECONDS = 1800  # 30 minutes
-    SCORE_DECAY_PENALTY_PER_HOUR = 5  # Score penalty per hour
+    ATTACK_COOLDOWN_SECONDS = 300
+    SUCCESS_BONUS_DURATION_SECONDS = 1800
+    SCORE_DECAY_PENALTY_PER_HOUR = 5
     PMKID_FRIENDLY_APS_THRESHOLD = 3
     PMKID_FRIENDLY_BOOST_FACTOR = 1.5
     HANDSHAKE_WEIGHT = 10
     CLIENT_WEIGHT = 1
-    SCORE_RECALCULATION_INTERVAL_SECONDS = 30  # 30 seconds
-    EXPLORATION_PROBABILITY = 0.1  # 10% chance to explore a random channel in loose mode
-    DRIVE_BY_AP_EXPIRY_SECONDS = 1800  # 30 minutes
-    DRIVE_BY_CLIENT_EXPIRY_SECONDS = 900  # 15 minutes
-    DRIVE_BY_ATTACK_SCORE_THRESHOLD = 20 # Lower score threshold
-    DRIVE_BY_ATTACK_COOLDOWN_SECONDS = 60  # 1 minute
+    SCORE_RECALCULATION_INTERVAL_SECONDS = 30
+    EXPLORATION_PROBABILITY = 0.1
+    DRIVE_BY_AP_EXPIRY_SECONDS = 1800
+    DRIVE_BY_CLIENT_EXPIRY_SECONDS = 900
+    DRIVE_BY_ATTACK_SCORE_THRESHOLD = 20
+    DRIVE_BY_ATTACK_COOLDOWN_SECONDS = 60
     
-    # AUTO Mode constants (activity-based since no GPS)
-    STATIONARY_SECONDS = 3600      # 1 hour to trigger "recon" mode
-    ACTIVITY_THRESHOLD = 5         # Number of new APs to consider "moving"
-    ACTIVITY_WINDOW_SECONDS = 300  # 5 minutes window for activity detection
+    STATIONARY_SECONDS = 3600
+    ACTIVITY_THRESHOLD = 5
+    ACTIVITY_WINDOW_SECONDS = 300
     
     def __init__(self):
         self.ready = False
@@ -54,171 +50,90 @@ class SATpwn(plugins.Plugin):
         self.modes = ['strict', 'loose', 'drive-by', 'recon', 'auto']
         self.memory_path = '/etc/pwnagotchi/SATpwn_memory.json'
         self.executor = ThreadPoolExecutor(max_workers=5)
-        self.mode = self.modes[0]  # Default mode, will be overridden by _load_memory()
+        self.mode = self.modes[0]
         self.channel_stats = {}
         self.memory_is_dirty = True
         self.recon_channel_iterator = None
         self.recon_channels_tested = []
         
-        # AUTO mode state (activity-based without GPS)
         self._last_activity_check = 0
-        self._activity_history = []  # Track AP discoveries over time
+        self._activity_history = []
         self.home_whitelist = set()
-        self._current_auto_submode = None  # Track what AUTO is currently running
-        self._stationary_start = None  # When we first detected stationary state
+        self._current_auto_submode = None
+        self._stationary_start = None
         
-        logging.info("[SATpwn] Plugin initializing without GPS dependencies...")
+        logging.info("[SATpwn] Plugin initializing...")
         self._load_home_whitelist()
     
     def _load_home_whitelist(self):
-        """Load home SSID/BSSID whitelist with robust TOML parsing and format detection."""
+        """Load home SSID/BSSID whitelist from flat TOML key."""
         try:
             config_path = "/etc/pwnagotchi/config.toml"
-            logging.debug(f"[SATpwn] Attempting to load config from: {config_path}")
             
             if not os.path.exists(config_path):
-                logging.warning(f"[SATpwn] config.toml not found at {config_path}")
                 self.home_whitelist = set()
                 return
             
-            # Detect TOML library and use appropriate mode
-            try:
-                # Check if this is the built-in tomllib (Python 3.11+) which requires binary mode
-                if hasattr(tomllib, '__name__') and getattr(tomllib, '__name__', '') == 'tomllib':
-                    open_mode = "rb"
-                    logging.debug("[SATpwn] Using tomllib (Python 3.11+) with binary mode")
+            with open(config_path, "rb") as f:
+                conf = tomllib.load(f)
+            
+            if 'main.home_whitelist' in conf:
+                raw = conf['main.home_whitelist']
+                if isinstance(raw, str):
+                    entries = [x.strip() for x in raw.split(',') if x.strip()]
+                elif isinstance(raw, list):
+                    entries = [str(x).strip() for x in raw if str(x).strip()]
                 else:
-                    # This is tomli or toml - requires text mode
-                    open_mode = "r"
-                    logging.debug("[SATpwn] Using tomli/toml with text mode")
-                
-                with open(config_path, open_mode) as f:
-                    conf = tomllib.load(f)
-                
-                logging.debug(f"[SATpwn] Config loaded successfully. Top-level keys: {list(conf.keys())}")
-                
-                # Try multiple ways to get the home whitelist
-                home_whitelist = None
-                
-                # Method 1: Flat key format (jayofelony style)
-                if 'main.home_whitelist' in conf:
-                    home_whitelist = conf['main.home_whitelist']
-                    logging.debug("[SATpwn] Found whitelist using flat key 'main.home_whitelist'")
-                
-                # Method 2: Nested table format
-                elif 'main' in conf and isinstance(conf['main'], dict):
-                    main_section = conf['main']
-                    if 'home_whitelist' in main_section:
-                        home_whitelist = main_section['home_whitelist']
-                        logging.debug("[SATpwn] Found whitelist in [main] table under 'home_whitelist'")
-                    elif 'whitelist' in main_section:
-                        home_whitelist = main_section['whitelist']
-                        logging.debug("[SATpwn] Found whitelist in [main] table under 'whitelist'")
-                
-                # Method 3: Direct top-level key
-                elif 'home_whitelist' in conf:
-                    home_whitelist = conf['home_whitelist']
-                    logging.debug("[SATpwn] Found whitelist as top-level 'home_whitelist'")
-                
-                # Process the whitelist data
-                if home_whitelist is not None:
-                    # Handle different data types
-                    if isinstance(home_whitelist, str):
-                        # Split comma-separated string
-                        home_list = [x.strip() for x in home_whitelist.split(',') if x.strip()]
-                        logging.debug(f"[SATpwn] Parsed CSV string into list: {home_list}")
-                    elif isinstance(home_whitelist, list):
-                        home_list = [str(x).strip() for x in home_whitelist if str(x).strip()]
-                        logging.debug(f"[SATpwn] Using list directly: {home_list}")
-                    else:
-                        logging.warning(f"[SATpwn] Unexpected whitelist format: {type(home_whitelist)}")
-                        home_list = []
-                    
-                    if home_list:
-                        self.home_whitelist = set(home_list)
-                        logging.info(f"[SATpwn] Loaded home whitelist: {len(self.home_whitelist)} entries: {self.home_whitelist}")
-                    else:
-                        self.home_whitelist = set()
-                        logging.warning("[SATpwn] Home whitelist was empty after processing")
-                else:
-                    self.home_whitelist = set()
-                    logging.warning("[SATpwn] No home whitelist found in config file")
-                
-            except Exception as parse_error:
-                logging.error(f"[SATpwn] Error parsing TOML config: {parse_error}")
+                    entries = []
+                self.home_whitelist = set(entries)
+                logging.info(f"[SATpwn] Loaded home whitelist: {self.home_whitelist}")
+            else:
                 self.home_whitelist = set()
                 
         except Exception as e:
-            logging.error(f"[SATpwn] Could not load home whitelist from config: {e}")
+            logging.error(f"[SATpwn] Error loading home whitelist: {e}")
             self.home_whitelist = set()
     
     def _update_activity_history(self, new_ap_count):
-        """Track AP discovery activity over time for movement detection."""
+        """Track AP discovery activity for movement detection."""
         now = time.time()
         self._activity_history.append((now, new_ap_count))
-        
-        # Clean old entries outside the activity window
         cutoff = now - self.ACTIVITY_WINDOW_SECONDS
         self._activity_history = [(t, count) for t, count in self._activity_history if t > cutoff]
     
     def _is_stationary(self):
         """Check if device appears stationary based on AP discovery patterns."""
         now = time.time()
-        
-        # Calculate recent AP discovery rate
         recent_activity = sum(count for t, count in self._activity_history 
                              if now - t <= self.ACTIVITY_WINDOW_SECONDS)
-        
-        # Low activity suggests stationary behavior
         low_activity = recent_activity < self.ACTIVITY_THRESHOLD
         
         if low_activity:
             if self._stationary_start is None:
                 self._stationary_start = now
-                logging.debug("[SATpwn] Stationary state detected - starting timer")
-            
             elapsed = now - self._stationary_start
-            stationary = elapsed >= self.STATIONARY_SECONDS
-            logging.debug(f"[SATpwn] Stationary check - elapsed: {elapsed:.0f}s, stationary: {stationary}")
-            return stationary
+            return elapsed >= self.STATIONARY_SECONDS
         else:
-            # Reset stationary timer if we see activity
             if self._stationary_start is not None:
-                logging.debug("[SATpwn] Activity detected - resetting stationary timer")
                 self._stationary_start = None
             return False
     
     def _is_moving(self):
         """Detect movement based on high AP discovery rate."""
         now = time.time()
-        
-        # Calculate recent AP discovery rate
         recent_activity = sum(count for t, count in self._activity_history 
                              if now - t <= self.ACTIVITY_WINDOW_SECONDS)
-        
-        moving = recent_activity >= self.ACTIVITY_THRESHOLD
-        logging.debug(f"[SATpwn] Movement check - recent_activity: {recent_activity}, moving: {moving}")
-        return moving
+        return recent_activity >= self.ACTIVITY_THRESHOLD
     
     def _home_ssid_visible(self):
-        """Check if any home SSID/BSSID is currently visible with debug logging."""
-        logging.debug(f"[SATpwn] Checking home whitelist: {self.home_whitelist}")
-        logging.debug(f"[SATpwn] Current memory has {len(self.memory)} APs")
-        
+        """Check if any home SSID/BSSID is currently visible."""
         if not self.home_whitelist:
-            logging.debug("[SATpwn] Home whitelist is empty")
             return False
         
-        visible_ssids = []
         for ap_mac, ap in self.memory.items():
             ssid = ap.get("ssid", "")
-            visible_ssids.append(ssid)
             if ssid in self.home_whitelist or ap_mac in self.home_whitelist:
-                logging.info(f"[SATpwn] Home SSID detected: '{ssid}' (MAC: {ap_mac})")
                 return True
-        
-        logging.debug(f"[SATpwn] Visible SSIDs: {visible_ssids}")
-        logging.debug("[SATpwn] No home SSID found in current scan")
         return False
     
     def _auto_mode_logic(self):
@@ -227,21 +142,15 @@ class SATpwn(plugins.Plugin):
         is_stationary = self._is_stationary()
         is_moving = self._is_moving()
         
-        logging.debug(f"[SATpwn] AUTO logic - home_visible: {home_ssid_visible}, stationary: {is_stationary}, moving: {is_moving}")
-        
-        # Priority: Home > Stationary > Moving > Default
         if home_ssid_visible or is_stationary:
-            return 'recon'  # Passive behavior when at home or stationary
+            return 'recon'
         if is_moving:
-            return 'drive-by'  # Aggressive mobile targeting
-        
-        # Default based on AP count
+            return 'drive-by'
         return 'loose' if len(self.memory) < 10 else 'strict'
         
     def _save_memory(self):
-        """Saves the current AP/client memory and current mode to a JSON file."""
+        """Save current AP/client memory and mode to JSON file."""
         try:
-            # Create a complete memory structure that includes metadata
             memory_data = {
                 "plugin_metadata": {
                     "current_mode": self.mode,
@@ -254,55 +163,36 @@ class SATpwn(plugins.Plugin):
             
             with open(self.memory_path, 'w') as f:
                 json.dump(memory_data, f, indent=4)
-            logging.debug(f"[SATpwn] Memory and mode '{self.mode}' saved to {self.memory_path}")
         except Exception as e:
             logging.error(f"[SATpwn] Error saving memory: {e}")
     
     def _load_memory(self):
-        """Loads the AP/client memory and restores the last saved mode from a JSON file."""
+        """Load AP/client memory and restore saved mode from JSON file."""
         if os.path.exists(self.memory_path):
             try:
                 with open(self.memory_path, 'r') as f:
                     data = json.load(f)
                 
-                # Handle both old format (direct AP data) and new format (with metadata)
                 if "plugin_metadata" in data:
-                    # New format with metadata
                     metadata = data["plugin_metadata"]
                     self.memory = data.get("ap_data", {})
-                    
-                    # Restore the last saved mode
                     saved_mode = metadata.get("current_mode", self.modes[0])
                     if saved_mode in self.modes:
                         self.mode = saved_mode
-                        logging.info(f"[SATpwn] Restored mode: {self.mode}")
                     else:
-                        logging.warning(f"[SATpwn] Invalid saved mode '{saved_mode}', using default: {self.modes[0]}")
                         self.mode = self.modes[0]
-                    
-                    # Restore stationary timer if available
                     self._stationary_start = metadata.get("stationary_start", None)
-                    if self._stationary_start:
-                        logging.info(f"[SATpwn] Restored stationary timer")
-                    
-                    last_saved = metadata.get("last_saved", 0)
-                    time_diff = time.time() - last_saved
-                    logging.info(f"[SATpwn] Memory loaded from {self.memory_path} (last saved {time_diff:.0f}s ago)")
                 else:
-                    # Old format - just AP data
                     self.memory = data
-                    self.mode = self.modes[0]  # Default to strict mode
-                    logging.info(f"[SATpwn] Legacy memory format loaded, defaulting to mode: {self.mode}")
+                    self.mode = self.modes[0]
                     
             except Exception as e:
                 logging.error(f"[SATpwn] Error loading memory: {e}")
                 self.memory = {}
                 self.mode = self.modes[0]
-        else:
-            logging.info("[SATpwn] No existing memory file found, starting fresh")
     
     def _cleanup_memory(self):
-        """Removes old APs and clients from memory to keep it relevant."""
+        """Remove old APs and clients from memory."""
         self.memory_is_dirty = True
         now = time.time()
         ap_expiry = self.DRIVE_BY_AP_EXPIRY_SECONDS if self.mode == 'drive-by' else self.AP_EXPIRY_SECONDS
@@ -325,42 +215,35 @@ class SATpwn(plugins.Plugin):
                     del clients[client_mac]
     
     def _recalculate_client_score(self, ap_mac, client_mac):
-        """Calculates a client's score based on signal, success, and age."""
+        """Calculate client's score based on signal, success, and age."""
         client_data = self.memory[ap_mac]['clients'][client_mac]
-        # Base score from signal strength
         score = (client_data.get('signal', -100) + 100)
         
-        # Bonus for recent handshake success
         if client_data.get('last_success', 0) > time.time() - self.SUCCESS_BONUS_DURATION_SECONDS:
             score += 50
         
-        # Decay score based on how long ago the client was last seen
         age_hours = (time.time() - client_data.get('last_seen', time.time())) / 3600
         decay_amount = age_hours * self.SCORE_DECAY_PENALTY_PER_HOUR
         score -= decay_amount
-        
-        # Ensure score doesn't go below zero
         score = max(0, score)
         
         client_data['score'] = score
         return score
     
     def _execute_attack(self, agent, ap_mac, client_mac):
-        """Logs the intent to attack a high-value target."""
-        # Block attacks if we're in AUTO mode and the logic says we should be passive
+        """Execute attack on high-value target."""
         if self.mode == 'auto':
             sub_mode = self._auto_mode_logic()
             if sub_mode == 'recon':
-                logging.debug(f"[SATpwn] AUTO mode blocking attack - in recon/passive mode")
                 return
                 
         try:
-            logging.info(f"[SATpwn] Executing tactical attack on {client_mac} via {ap_mac}")
+            logging.info(f"[SATpwn] Executing attack on {client_mac} via {ap_mac}")
         except Exception as e:
             logging.error(f"[SATpwn] Attack execution failed: {e}")
     
     def _get_channel_stats(self):
-        """Aggregates stats per channel from memory."""
+        """Aggregate stats per channel from memory."""
         channel_stats = {}
         for ap_mac, ap_data in self.memory.items():
             ch = ap_data.get("channel")
@@ -374,7 +257,7 @@ class SATpwn(plugins.Plugin):
         return channel_stats
     
     def _channel_iterator(self, channels):
-        """Generator that yields channels one by one and cycles through them."""
+        """Generator that cycles through channels."""
         if not channels:
             return
         while True:
@@ -382,18 +265,18 @@ class SATpwn(plugins.Plugin):
                 yield channel
     
     def on_loaded(self):
-        logging.info("[SATpwn] plugin loaded")
-        self._load_memory()  # This now also restores the saved mode
+        logging.info("[SATpwn] Plugin loaded")
+        self._load_memory()
     
     def on_unload(self, ui):
-        self._save_memory()  # This now also saves the current mode
+        self._save_memory()
         self.executor.shutdown(wait=False)
-        logging.info("[SATpwn] plugin unloaded")
+        logging.info("[SATpwn] Plugin unloaded")
     
     def on_ready(self, agent):
         self.agent = agent
         self.ready = True
-        logging.info(f"[SATpwn] plugin ready in mode: {self.mode}")
+        logging.info(f"[SATpwn] Plugin ready in mode: {self.mode}")
     
     def on_ui_setup(self, ui):
         ui.add_element('sat_mode', components.Text(
@@ -410,7 +293,6 @@ class SATpwn(plugins.Plugin):
     def on_wifi_update(self, agent, access_points):
         now = time.time()
         new_ap_count = 0
-        logging.debug(f"[SATpwn] WiFi update with {len(access_points)} APs")
         
         for ap in access_points:
             ap_mac = ap['mac'].lower()
@@ -450,7 +332,6 @@ class SATpwn(plugins.Plugin):
                 
                 client_data = self.memory[ap_mac]['clients'][client_mac]
                 
-                # Throttle score recalculation
                 last_recalculated = client_data.get('last_recalculated', 0)
                 if now - last_recalculated > self.SCORE_RECALCULATION_INTERVAL_SECONDS:
                     score = self._recalculate_client_score(ap_mac, client_mac)
@@ -466,7 +347,6 @@ class SATpwn(plugins.Plugin):
                     client_data['last_attempt'] = now
                     self.executor.submit(self._execute_attack, agent, ap_mac, client_mac)
         
-        # Update activity history for AUTO mode
         self._update_activity_history(new_ap_count)
         self.memory_is_dirty = True
     
@@ -482,17 +362,14 @@ class SATpwn(plugins.Plugin):
         
         self.memory_is_dirty = True
     
-    # Code for all of the modes (START)
     def _epoch_strict(self, agent, epoch, epoch_data, supported_channels):
         if self.memory_is_dirty or not self.channel_stats:
             self.channel_stats = self._get_channel_stats()
             self.memory_is_dirty = False
         
-        # Weighted selection logic
         channels = list(self.channel_stats.keys())
         if not channels:
             next_channel = random.choice(supported_channels)
-            logging.info(f"[SATpwn] No channel data, hopping to random channel {next_channel}")
             agent.set_channel(next_channel)
             return
         
@@ -504,7 +381,6 @@ class SATpwn(plugins.Plugin):
                 weight *= self.PMKID_FRIENDLY_BOOST_FACTOR
             weights.append(weight)
         
-        # Filter down to only channels that are supported by the hardware
         supported_channels_with_weights = []
         supported_weights = []
         for i, ch in enumerate(channels):
@@ -514,15 +390,12 @@ class SATpwn(plugins.Plugin):
         
         if not supported_channels_with_weights:
             next_channel = random.choice(supported_channels)
-            logging.info(f"[SATpwn] No tracked channels are supported, hopping to random supported channel {next_channel}")
         else:
             total_weight = sum(supported_weights)
             if total_weight == 0:
                 next_channel = random.choice(supported_channels_with_weights)
-                logging.info(f"[SATpwn] All tracked channel weights are zero, hopping to random tracked/supported channel {next_channel}")
             else:
                 next_channel = random.choices(supported_channels_with_weights, weights=supported_weights, k=1)[0]
-                logging.info(f"[SATpwn] Hopping to weighted-random channel {next_channel} (Mode: {self.mode})")
         
         agent.set_channel(next_channel)
     
@@ -533,15 +406,12 @@ class SATpwn(plugins.Plugin):
         
         if random.random() < self.EXPLORATION_PROBABILITY:
             next_channel = random.choice(supported_channels)
-            logging.info(f"[SATpwn] Exploring random channel {next_channel} (Mode: loose)")
             agent.set_channel(next_channel)
             return
         
-        # Weighted selection logic
         channels = list(self.channel_stats.keys())
         if not channels:
             next_channel = random.choice(supported_channels)
-            logging.info(f"[SATpwn] No channel data, hopping to random channel {next_channel}")
             agent.set_channel(next_channel)
             return
         
@@ -555,9 +425,7 @@ class SATpwn(plugins.Plugin):
         
         exploration_bonus = 1.0
         weights = [w + exploration_bonus for w in weights]
-        logging.debug("[SATpwn] Applied exploration bonus for loose mode.")
         
-        # Filter down to only channels that are supported by the hardware
         supported_channels_with_weights = []
         supported_weights = []
         for i, ch in enumerate(channels):
@@ -567,31 +435,24 @@ class SATpwn(plugins.Plugin):
         
         if not supported_channels_with_weights:
             next_channel = random.choice(supported_channels)
-            logging.info(f"[SATpwn] No tracked channels are supported, hopping to random supported channel {next_channel}")
         else:
             total_weight = sum(supported_weights)
             if total_weight == 0:
                 next_channel = random.choice(supported_channels_with_weights)
-                logging.info(f"[SATpwn] All tracked channel weights are zero, hopping to random tracked/supported channel {next_channel}")
             else:
                 next_channel = random.choices(supported_channels_with_weights, weights=supported_weights, k=1)[0]
-                logging.info(f"[SATpwn] Hopping to weighted-random channel {next_channel} (Mode: {self.mode})")
         
         agent.set_channel(next_channel)
     
     def _epoch_driveby(self, agent, epoch, epoch_data, supported_channels):
-        # Drive-by mode uses strict logic but with different timing constants
         self._epoch_strict(agent, epoch, epoch_data, supported_channels)
     
     def _epoch_recon(self, agent, epoch, epoch_data, supported_channels):
-        # Initialize channel iterator if not already done
         if self.recon_channel_iterator is None:
             self.recon_channel_iterator = self._channel_iterator(supported_channels)
             self.recon_channels_tested = []
         
-        # If we've tested all channels, switch to strict mode for final optimization
         if len(self.recon_channels_tested) >= len(supported_channels):
-            logging.info("[SATpwn] RECON: Completed channel survey, switching to strict mode logic")
             self._epoch_strict(agent, epoch, epoch_data, supported_channels)
             return
         
@@ -599,28 +460,20 @@ class SATpwn(plugins.Plugin):
             next_channel = next(self.recon_channel_iterator)
             if next_channel not in self.recon_channels_tested:
                 self.recon_channels_tested.append(next_channel)
-                logging.info(f"[SATpwn] RECON: Inspecting channel {next_channel} and gathering info...")
                 agent.set_channel(next_channel)
             else:
-                # Skip already tested channels
                 self._epoch_recon(agent, epoch, epoch_data, supported_channels)
         except StopIteration:
-            # This shouldn't happen with our infinite iterator, but just in case
-            logging.info("[SATpwn] RECON: Channel iterator exhausted, switching to strict mode")
             self._epoch_strict(agent, epoch, epoch_data, supported_channels)
-    
-    # Code for all of the modes (END)
     
     def on_epoch(self, agent, epoch, epoch_data):
         self._cleanup_memory()
         if not self.ready:
             return Response("Plugin not ready yet.", mimetype='text/html')
         
-        # Save memory and current mode every epoch
         self._save_memory()
         
         supported_channels = agent.supported_channels()
-        logging.debug(f"[SATpwn] Supported channels: {supported_channels}")
         
         if not supported_channels:
             logging.warning("[SATpwn] No supported channels found.")
@@ -630,57 +483,42 @@ class SATpwn(plugins.Plugin):
             sub_mode = self._auto_mode_logic()
             self._current_auto_submode = sub_mode
             if sub_mode == 'recon':
-                logging.info("[SATpwn] AUTO ➜ RECON mode (home/stationary)")
                 self._epoch_recon(agent, epoch, epoch_data, supported_channels)
             elif sub_mode == 'drive-by':
-                logging.info("[SATpwn] AUTO ➜ DRIVE-BY mode (moving)")
                 self._epoch_driveby(agent, epoch, epoch_data, supported_channels)
             elif sub_mode == 'loose':
-                logging.info("[SATpwn] AUTO ➜ LOOSE mode (away & low data)")
                 self._epoch_loose(agent, epoch, epoch_data, supported_channels)
             else:
-                logging.info("[SATpwn] AUTO ➜ STRICT mode (away & data-rich)")
                 self._epoch_strict(agent, epoch, epoch_data, supported_channels)
         elif self.mode == 'loose':
-            logging.info("[SATpwn] Epoch done; loading loose mode")
             self._epoch_loose(agent, epoch, epoch_data, supported_channels)
         elif self.mode == 'drive-by':
-            logging.info("[SATpwn] Epoch done; loading drive-by mode")
             self._epoch_driveby(agent, epoch, epoch_data, supported_channels)
         elif self.mode == 'recon':
-            logging.info("[SATpwn] Epoch done; loading recon mode")
             self._epoch_recon(agent, epoch, epoch_data, supported_channels)
         else:
-            logging.info("[SATpwn] Epoch done; loading strict mode")
             self._epoch_strict(agent, epoch, epoch_data, supported_channels)
     
     def on_webhook(self, path, request):
-        # Handle mode toggling
         if path == 'toggle_mode':
             current_index = self.modes.index(self.mode)
-            logging.debug(f"current index = {current_index}")
             next_index = (current_index + 1) % len(self.modes)
-            logging.debug(f"next index = {next_index}")
             
             old_mode = self.mode
             self.mode = self.modes[next_index]
             
-            # Reset recon state when switching modes
             if self.mode == 'recon':
                 self.recon_channel_iterator = None
                 self.recon_channels_tested = []
             
-            # Reset AUTO sub-mode tracking
             if self.mode == 'auto':
                 self._current_auto_submode = None
             
-            # Save the new mode immediately
             self._save_memory()
             
             logging.info(f"[SATpwn] Mode changed from {old_mode} to {self.mode}")
             return Response('<html><head><meta http-equiv="refresh" content="0; url=/plugins/SATpwn/" /></head></html>', mimetype='text/html')
         
-        # Main dashboard page
         if path == '/' or not path:
             if self.memory_is_dirty or not self.channel_stats:
                 self.channel_stats = self._get_channel_stats()
@@ -712,14 +550,12 @@ class SATpwn(plugins.Plugin):
             next_mode_name = self.modes[next_mode_index].replace('-', ' ').title()
             mode_toggle_button = f"<a href='/plugins/SATpwn/toggle_mode' style='display:inline-block;padding:10px;background-color:#569cd6;color:#fff;text-decoration:none;border-radius:5px;'>Switch to {next_mode_name} Mode</a>"
             
-            # Add recon status if in recon mode
             recon_status = ""
             if self.mode == 'recon':
                 channels_tested = len(self.recon_channels_tested) if self.recon_channels_tested else 0
                 total_channels = len(self.agent.supported_channels()) if self.agent else 0
                 recon_status = f"<p><b>Recon Progress:</b> {channels_tested}/{total_channels} channels surveyed</p>"
             
-            # Add AUTO mode status (without GPS info)
             auto_status = ""
             if self.mode == 'auto':
                 home_visible = self._home_ssid_visible()
@@ -742,7 +578,7 @@ class SATpwn(plugins.Plugin):
             html = f"""
             <html>
             <head>
-                <title>Smart Auto-Tune Dashboard</title>
+                <title>SATpwn Dashboard</title>
                 <style>
                     body {{ font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; margin: 0; padding: 20px; }}
                     .container {{ display: grid; grid-template-columns: 1fr; gap: 20px; }}
