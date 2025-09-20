@@ -38,7 +38,6 @@ At the beginning of each epoch, the plugin calculates a "weight" for every chann
 -   **Drive-by Mode:** This mode uses much shorter expiry times for APs (30 min) and clients (15 min). It also uses a lower score threshold and a shorter cooldown for initiating attacks, making it highly aggressive.
 -   **Recon Mode:** Systematically cycles through all supported channels to gather data without performing any attacks.
 -   **Auto Mode:** This is where the activity based dtection comes into play. The plugin uses the following logic to decide which sub-mode to use:
-    -   If a whitelisted home SSID is visible, or the device has been stationary for over an hour, or it is within the home deadzone, it switches to **recon** mode.
     -   If the device is moving, it will go into driveby mode.
     -   If the device is stationary, it will go into recon mode.
     -   If the device sees a lot of data, it will go into strict mode
