@@ -20,7 +20,7 @@ class SATpwn(plugins.Plugin):
     __author__ = 'Renmeii x Mr-Cass-Ette and discoJack too '
     __version__ = 'x88.0.8'
     __license__ = 'GPL3'
-    __description__ = 'SATpwn intelligent targeting system'
+    __description__ = 'SATpwn intelligent targeting system with exclusive mode'
     
     AP_EXPIRY_SECONDS = 3600 * 48
     CLIENT_EXPIRY_SECONDS = 3600 * 24
@@ -61,22 +61,26 @@ class SATpwn(plugins.Plugin):
         self.home_whitelist = set()
         self._current_auto_submode = None
         self._stationary_start = None
+        self.disable_defaults = False
+        self.disabled_plugins = []
         
         logging.info("[SATpwn] Plugin initializing...")
-        self._load_home_whitelist()
+        self._load_config()
     
-    def _load_home_whitelist(self):
-        """Load home SSID/BSSID whitelist from flat TOML key."""
+    def _load_config(self):
+        """Load configuration from TOML including whitelist and disable_defaults setting."""
         try:
             config_path = "/etc/pwnagotchi/config.toml"
             
             if not os.path.exists(config_path):
                 self.home_whitelist = set()
+                self.disable_defaults = False
                 return
             
             with open(config_path, "rb") as f:
                 conf = tomllib.load(f)
             
+            # Load home whitelist
             if 'main.home_whitelist' in conf:
                 raw = conf['main.home_whitelist']
                 if isinstance(raw, str):
@@ -89,10 +93,50 @@ class SATpwn(plugins.Plugin):
                 logging.info(f"[SATpwn] Loaded home whitelist: {self.home_whitelist}")
             else:
                 self.home_whitelist = set()
+            
+            # Load disable_defaults setting
+            if 'main.disable_defaults' in conf:
+                self.disable_defaults = bool(conf['main.disable_defaults'])
+                logging.info(f"[SATpwn] Disable defaults mode: {self.disable_defaults}")
+            else:
+                self.disable_defaults = False
                 
         except Exception as e:
-            logging.error(f"[SATpwn] Error loading home whitelist: {e}")
+            logging.error(f"[SATpwn] Error loading config: {e}")
             self.home_whitelist = set()
+            self.disable_defaults = False
+    
+    def _disable_other_plugins(self, agent):
+        """Disable all other plugins except SATpwn if disable_defaults is True."""
+        if not self.disable_defaults:
+            return
+        
+        try:
+            # Get list of all loaded plugins
+            loaded_plugins = list(agent._plugins.keys()) if hasattr(agent, '_plugins') else []
+            
+            for plugin_name in loaded_plugins:
+                if plugin_name.lower() != 'satpwn':
+                    try:
+                        # Attempt to disable the plugin
+                        if hasattr(agent, 'unload_plugin'):
+                            agent.unload_plugin(plugin_name)
+                        elif hasattr(agent, '_plugins') and plugin_name in agent._plugins:
+                            # Try to remove from plugins dict
+                            del agent._plugins[plugin_name]
+                        
+                        self.disabled_plugins.append(plugin_name)
+                        logging.info(f"[SATpwn] Disabled plugin: {plugin_name}")
+                    except Exception as e:
+                        logging.error(f"[SATpwn] Failed to disable plugin {plugin_name}: {e}")
+            
+            if self.disabled_plugins:
+                logging.info(f"[SATpwn] Exclusive mode enabled - disabled {len(self.disabled_plugins)} plugins: {self.disabled_plugins}")
+            else:
+                logging.info("[SATpwn] Exclusive mode enabled - no other plugins found to disable")
+                
+        except Exception as e:
+            logging.error(f"[SATpwn] Error disabling plugins: {e}")
     
     def _update_activity_history(self, new_ap_count):
         """Track AP discovery activity for movement detection."""
@@ -156,7 +200,9 @@ class SATpwn(plugins.Plugin):
                     "current_mode": self.mode,
                     "last_saved": time.time(),
                     "version": self.__version__,
-                    "stationary_start": self._stationary_start
+                    "stationary_start": self._stationary_start,
+                    "disable_defaults": self.disable_defaults,
+                    "disabled_plugins": self.disabled_plugins
                 },
                 "ap_data": self.memory
             }
@@ -182,6 +228,7 @@ class SATpwn(plugins.Plugin):
                     else:
                         self.mode = self.modes[0]
                     self._stationary_start = metadata.get("stationary_start", None)
+                    self.disabled_plugins = metadata.get("disabled_plugins", [])
                 else:
                     self.memory = data
                     self.mode = self.modes[0]
@@ -236,9 +283,14 @@ class SATpwn(plugins.Plugin):
             sub_mode = self._auto_mode_logic()
             if sub_mode == 'recon':
                 return
+        
+        # Block attacks in recon mode
+        if self.mode == 'recon':
+            return
                 
         try:
             logging.info(f"[SATpwn] Executing attack on {client_mac} via {ap_mac}")
+            # In a real implementation, this would call agent.deauth() or similar
         except Exception as e:
             logging.error(f"[SATpwn] Attack execution failed: {e}")
     
@@ -276,7 +328,12 @@ class SATpwn(plugins.Plugin):
     def on_ready(self, agent):
         self.agent = agent
         self.ready = True
-        logging.info(f"[SATpwn] Plugin ready in mode: {self.mode}")
+        
+        # Disable other plugins if configured to do so
+        self._disable_other_plugins(agent)
+        
+        exclusive_status = "EXCLUSIVE" if self.disable_defaults else "SHARED"
+        logging.info(f"[SATpwn] Plugin ready in mode: {self.mode} ({exclusive_status})")
     
     def on_ui_setup(self, ui):
         ui.add_element('sat_mode', components.Text(
@@ -288,6 +345,8 @@ class SATpwn(plugins.Plugin):
         mode_text = self.mode.capitalize()
         if self.mode == 'auto' and self._current_auto_submode:
             mode_text += f" ({self._current_auto_submode})"
+        if self.disable_defaults:
+            mode_text += " [EXCL]"
         ui.set('sat_mode', f'SAT Mode: {mode_text}')
     
     def on_wifi_update(self, agent, access_points):
@@ -556,6 +615,26 @@ class SATpwn(plugins.Plugin):
                 total_channels = len(self.agent.supported_channels()) if self.agent else 0
                 recon_status = f"<p><b>Recon Progress:</b> {channels_tested}/{total_channels} channels surveyed</p>"
             
+            # Exclusive mode status
+            exclusive_status = ""
+            if self.disable_defaults:
+                exclusive_color = "#4CAF50"
+                exclusive_text = "EXCLUSIVE MODE ENABLED"
+                disabled_count = len(self.disabled_plugins)
+                exclusive_status = f"""
+                <p style="color: {exclusive_color};"><b>{exclusive_text}</b></p>
+                <p><b>Disabled Plugins:</b> {disabled_count}</p>
+                <p><b>SATpwn is the ONLY active plugin</b></p>
+                """
+            else:
+                exclusive_color = "#FFA726"
+                exclusive_text = "SHARED MODE"
+                exclusive_status = f"""
+                <p style="color: {exclusive_color};"><b>{exclusive_text}</b></p>
+                <p><b>Other plugins may also be active</b></p>
+                <p><b>Set main.disable_defaults = true for exclusive mode</b></p>
+                """
+            
             auto_status = ""
             if self.mode == 'auto':
                 home_visible = self._home_ssid_visible()
@@ -583,6 +662,7 @@ class SATpwn(plugins.Plugin):
                     body {{ font-family: monospace; background-color: #1e1e1e; color: #d4d4d4; margin: 0; padding: 20px; }}
                     .container {{ display: grid; grid-template-columns: 1fr; gap: 20px; }}
                     .grid-2-col {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }}
+                    .grid-3-col {{ display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; }}
                     .card {{ background-color: #252526; border: 1px solid #333; border-radius: 5px; padding: 15px; }}
                     h1, h2 {{ color: #569cd6; border-bottom: 1px solid #333; padding-bottom: 5px;}}
                     table {{ width: 100%; border-collapse: collapse; }}
@@ -594,7 +674,7 @@ class SATpwn(plugins.Plugin):
             <body>
                 <h1>SATpwn Dashboard</h1>
                 <div class="container">
-                    <div class="grid-2-col">
+                    <div class="grid-3-col">
                         <div class="card">
                             <h2>Live Stats</h2>
                             <p>Total APs Tracked: {total_aps}</p>
@@ -604,9 +684,16 @@ class SATpwn(plugins.Plugin):
                             <h2>Controls</h2>
                             <p><b>Current Mode:</b> {self.mode.upper()}</p>
                             {recon_status}
-                            {auto_status}
                             {mode_toggle_button}
                         </div>
+                        <div class="card">
+                            <h2>Plugin Status</h2>
+                            {exclusive_status}
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h2>AUTO Mode Status</h2>
+                        {auto_status if auto_status else '<p>Not in AUTO mode</p>'}
                     </div>
                     <div class="card">
                         <h2>Channel Weights</h2>
