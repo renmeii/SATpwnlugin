@@ -42,10 +42,8 @@ At the beginning of each epoch, the plugin calculates a "weight" for every chann
     -   If the device is moving (based on speed and distance), it switches to **drive-by** mode.
     -   Otherwise, it will choose between **loose** and **strict** mode based on the amount of data it has collected.
 
-### 4. Distance Calculation
-The plugin uses the **Haversine formula** to accurately calculate the distance between two GPS coordinates. This is used to determine if the device is within the home deadzone and to track how far it has moved.
-
-You can cycle through the modes by clicking the "Switch to..." button on the web dashboard.
+### 4. Activity Based Detection
+The plugin uses state, and movement detection logic for AUTO mode. HOME/STATIONARY -><br> recon mode. MOVING/DRIVING -> driveby mode. <br> LOW DATA-> Loose Mode<br>RICH DATA -> Strict Mode<br>
 
 ## Installation
 
