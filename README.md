@@ -17,8 +17,8 @@ This plugin was built to be a custom, lightweight alternative to other advanced 
 -   **On-Screen Display:** Shows the current operating mode directly on the Pwnagotchi's e-ink screen for at-a-glance status awareness.
 -   **Performance Optimized:** Caching layers and calculation throttling have been implemented to reduce CPU load and ensure the plugin runs smoothly on all Raspberry Pi models.
 -   **Persistent Memory:** Remembers all seen access points and clients by saving its memory to a JSON file.
--   **Tactical Dashboard:** A comprehensive web UI to monitor the plugin's status, live stats, channel weights, and a detailed view of the AP/client memory. The dashboard also displays live GPS data.
--   **Exclusive Mode:** "main.disable_defaults = true" to ensure SATpwn is tthe only scanning and attack logic!
+-   **Tactical Dashboard:** A comprehensive web UI to monitor the plugin's status, live stats, channel weights, and a detailed view of the AP/client memory. 
+-   **Exclusive Mode:** "main.disable_defaults = true" to ensure SATpwn is the only scanning and attack logic!
 ## How It Works
 
 ### 1. AP & Client Memory
@@ -33,11 +33,11 @@ At the beginning of each epoch, the plugin calculates a "weight" for every chann
 -   **Loose Mode:** The plugin adds an "exploration bonus" to the weight of all channels, making it more likely to try less common channels. It also has a 10% chance to jump to a completely random supported channel to discover new networks.
 -   **Drive-by Mode:** This mode uses much shorter expiry times for APs (30 min) and clients (15 min). It also uses a lower score threshold and a shorter cooldown for initiating attacks, making it highly aggressive.
 -   **Recon Mode:** Systematically cycles through all supported channels to gather data without performing any attacks.
--   **Auto Mode:** This is where the activity based dtection comes into play. The plugin uses the following logic to decide which sub-mode to use:
+-   **Auto Mode:** This is where the activity based detection comes into play. The plugin uses the following logic to decide which sub-mode to use:
     -   If the device is moving, it will go into driveby mode. (5+ new APs in 5 minutes = moving)
-    -   If the device is stationary, it will go into recon mode. (<5 new APS consistently for 1+ hour = stationary)
-    -   If the device sees a lot of data, it will go into strict mode (<10 APs in memorrry = loose mode, 10 or more than = strict mode)
-    -   If the device sees a not a whole lot of data, it will go into loose mode.
+    -   If the device is stationary, it will go into recon mode. (<5 new APs consistently for 1+ hour = stationary)
+    -   Away from home + <10 APs tracked, it will go into loose mode.
+    -   Away from home + 10+ APs tracked, it will go into strict mode.
 
 
 ## Installation
