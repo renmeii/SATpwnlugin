@@ -22,7 +22,7 @@ This plugin was built to be a custom, lightweight alternative to other advanced 
 -   **Performance Optimized:** Caching layers and calculation throttling have been implemented to reduce CPU load and ensure the plugin runs smoothly on all Raspberry Pi models.
 -   **Persistent Memory:** Remembers all seen access points, clients, and the home anchor point across restarts by saving its memory to a JSON file.
 -   **Tactical Dashboard:** A comprehensive web UI to monitor the plugin's status, live stats, channel weights, and a detailed view of the AP/client memory. The dashboard also displays live GPS data.
--   **Exclusive Mode:** "main.disable_defaults = true" to ensure SATpwn is tthe only scanning logic!
+-   **Exclusive Mode:** "main.disable_defaults = true" to ensure SATpwn is tthe only scanning and attack logic!
 ## How It Works
 
 ### 1. AP & Client Memory
