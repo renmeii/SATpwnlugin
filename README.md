@@ -22,7 +22,7 @@ This plugin was built to be a custom, lightweight alternative to other advanced 
 ## How It Works
 
 ### 1. AP & Client Memory
-The plugin maintains a memory of every access point and client it encounters in a JSON file located at `/etc/pwnagotchi/SATpwn_memory.json`. This file stores SSIDs, channels, signal strengths, handshake counts, timestamps, and the home anchor point.
+The plugin maintains a memory of every access point and client it encounters in a JSON file located at `/etc/pwnagotchi/SATpwn_memory.json`. This file stores SSIDs, channels, signal strengths, handshake counts, and timestamps.
 
 ### 2. Client Scoring
 Each client is assigned a score to determine its value as a target. The score is calculated based on signal strength, recent handshake success, and a linear decay based on age.
