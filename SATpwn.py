@@ -126,8 +126,8 @@ class SATpwn(plugins.Plugin):
                 return
 
             # Load home whitelist from main section
-            if 'main' in conf and 'home_whitelist' in conf['main']:
-                raw = conf['main']['home_whitelist']
+            if 'main' in conf and 'whitelist' in conf['main']:
+                raw = conf['main']['whitelist']
                 if isinstance(raw, str):
                     entries = [x.strip() for x in raw.split(',') if x.strip()]
                 elif isinstance(raw, list):
