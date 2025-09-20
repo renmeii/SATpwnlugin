@@ -70,10 +70,7 @@ The plugin will display its current mode in the top-left corner of the Pwnagotch
 ### Tactical Dashboard
 You can access the dashboard by navigating to `http://<your-pwnagotchi-ip>:8080/plugins/SATpwn/`. The dashboard features:
 -   **Live Stats Card:** A quick overview of the total number of unique APs and clients being tracked.
--   **Controls Card:** Shows the current mode and provides a button to cycle to the next mode. When in "auto" mode, this card displays detailed GPS information, including:
-    -   Current GPS coordinates and speed.
-    -   The coordinates of the home anchor point.
-    -   The status of the home deadzone.
+-   **Controls Card:** Shows the current mode and provides a button to cycle to the next mode. When in "auto" mode, this card displays detailed 
 -   **Channel Weights Card:** A table showing the statistics for each channel.
 -   **AP & Client Memory Card:** A detailed, sortable table of all remembered APs and their clients.
 
