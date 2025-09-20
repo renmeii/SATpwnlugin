@@ -18,9 +18,9 @@ except ImportError:
 
 class SATpwn(plugins.Plugin):
     __author__ = 'Renmeii x Mr-Cass-Ette and discoJack too '
-    __version__ = 'x88.1.0-fixed'
+    __version__ = 'x88.0.8'
     __license__ = 'GPL3'
-    __description__ = 'SATpwn intelligent targeting system with exclusive mode and proper plugin registration'
+    __description__ = 'SATpwn intelligent targeting system'
 
     # Class constants
     AP_EXPIRY_SECONDS = 3600 * 48
@@ -65,14 +65,14 @@ class SATpwn(plugins.Plugin):
         self._current_auto_submode = None
         self._stationary_start = None
 
-        # Plugin control
+        # Plugin control - defaults
         self.plugin_enabled = True
         self.disable_defaults = False
         self.disabled_plugins = []
 
         # Initialize plugin with logging
         self.running = False
-        logging.info("[SATpwn] Plugin initializing...")
+        logging.info("[SATpwn] Plugin initializing with nested TOML config support...")
         self._load_config()
 
         # Mark as properly initialized
@@ -83,7 +83,7 @@ class SATpwn(plugins.Plugin):
             logging.info("[SATpwn] Plugin disabled via configuration")
 
     def _load_config(self):
-        """Load configuration from TOML including plugin enable/disable, whitelist and disable_defaults setting."""
+        """Load configuration from nested TOML structure that Pwnagotchi expects."""
         try:
             config_path = "/etc/pwnagotchi/config.toml"
 
@@ -97,24 +97,37 @@ class SATpwn(plugins.Plugin):
             with open(config_path, "rb") as f:
                 conf = tomllib.load(f)
 
-            # Load plugin enable/disable setting FIRST
-            if 'main.plugins.SATpwn' in conf:
-                self.plugin_enabled = bool(conf['main.plugins.SATpwn'])
+            # Load plugin enable/disable from nested structure
+            # Pwnagotchi expects: [main.plugins] SATpwn.enabled = true
+            if ('main' in conf and 
+                'plugins' in conf['main'] and 
+                'SATpwn' in conf['main']['plugins']):
+
+                plugin_config = conf['main']['plugins']['SATpwn']
+
+                # Handle both boolean and dict formats
+                if isinstance(plugin_config, bool):
+                    self.plugin_enabled = plugin_config
+                elif isinstance(plugin_config, dict):
+                    self.plugin_enabled = plugin_config.get('enabled', True)
+                else:
+                    self.plugin_enabled = True
+
                 logging.info(f"[SATpwn] Plugin enabled status: {self.plugin_enabled}")
             else:
                 self.plugin_enabled = True
-                logging.info("[SATpwn] Plugin enabled by default (no config key found)")
+                logging.info("[SATpwn] Plugin enabled by default (no nested config found)")
 
             # If plugin is disabled, skip loading other configs but still allow web interface
             if not self.plugin_enabled:
-                logging.info("[SATpwn] Plugin disabled via config - limited functionality")
+                logging.info("[SATpwn] Plugin disabled via config - web interface only")
                 self.home_whitelist = set()
                 self.disable_defaults = False
                 return
 
-            # Load home whitelist
-            if 'main.home_whitelist' in conf:
-                raw = conf['main.home_whitelist']
+            # Load home whitelist from main section
+            if 'main' in conf and 'home_whitelist' in conf['main']:
+                raw = conf['main']['home_whitelist']
                 if isinstance(raw, str):
                     entries = [x.strip() for x in raw.split(',') if x.strip()]
                 elif isinstance(raw, list):
@@ -126,9 +139,9 @@ class SATpwn(plugins.Plugin):
             else:
                 self.home_whitelist = set()
 
-            # Load disable_defaults setting
-            if 'main.disable_defaults' in conf:
-                self.disable_defaults = bool(conf['main.disable_defaults'])
+            # Load disable_defaults setting from main section
+            if 'main' in conf and 'disable_defaults' in conf['main']:
+                self.disable_defaults = bool(conf['main']['disable_defaults'])
                 logging.info(f"[SATpwn] Exclusive mode enabled: {self.disable_defaults}")
             else:
                 self.disable_defaults = False
@@ -361,11 +374,11 @@ class SATpwn(plugins.Plugin):
     # Plugin lifecycle methods
     def on_loaded(self):
         """Called when plugin is loaded."""
-        logging.info("[SATpwn] Plugin loaded")
+        logging.info("[SATpwn] Plugin loaded with nested config support")
         self._load_memory()
 
         if not self.plugin_enabled:
-            logging.info("[SATpwn] Plugin disabled via config - limited functionality")
+            logging.info("[SATpwn] Plugin disabled via config - web interface only")
 
     def on_unload(self, ui):
         """Called when plugin is unloaded."""
@@ -686,15 +699,15 @@ class SATpwn(plugins.Plugin):
                         <h2>Plugin Status</h2>
                         <p class="status">PLUGIN DISABLED</p>
                         <p>The SATpwn plugin is currently disabled via configuration.</p>
-                        <p>To enable, set: <code>main.plugins.SATpwn = true</code> in config.toml</p>
-                        <p>Then restart the pwnagotchi service: <code>sudo systemctl restart pwnagotchi</code></p>
+                        <p>To enable, add to config.toml:</p>
+                        <p><code>[main.plugins]<br>SATpwn.enabled = true</code></p>
+                        <p>Then restart: <code>sudo systemctl restart pwnagotchi</code></p>
                     </div>
                     <div class="card">
-                        <h2>Configuration</h2>
-                        <p>Required configuration keys in /etc/pwnagotchi/config.toml:</p>
-                        <p><code>main.plugins.SATpwn = true</code> - Enable the plugin</p>
-                        <p><code>main.disable_defaults = false</code> - Shared mode (optional)</p>
-                        <p><code>main.home_whitelist = "HomeSSID"</code> - Home networks (optional)</p>
+                        <h2>Required Configuration</h2>
+                        <p>Nested TOML structure in /etc/pwnagotchi/config.toml:</p>
+                        <p><code>[main.plugins]<br>SATpwn.enabled = true</code></p>
+                        <p><code>[main]<br>disable_defaults = false<br>home_whitelist = "HomeSSID"</code></p>
                     </div>
                 </body>
                 </html>
@@ -715,7 +728,7 @@ class SATpwn(plugins.Plugin):
                 for ch, stats in sorted(self.channel_stats.items()):
                     channel_html += f"<tr><td>{ch}</td><td>{stats['aps']}</td><td>{stats['clients']}</td><td>{stats['handshakes']}</td></tr>"
             else:
-                channel_html += "<tr><td colspan='4'>No data yet - plugin is starting up</td></tr>"
+                channel_html += "<tr><td colspan='4'>No data yet - plugin starting up</td></tr>"
             channel_html += "</table>"
 
             # Memory table
@@ -782,11 +795,11 @@ class SATpwn(plugins.Plugin):
                 <p><b>Home Whitelist:</b> {len(self.home_whitelist)} entries</p>
                 """
 
-            # Configuration display
+            # Configuration display - show proper nested structure
             config_display = f"""
-            <p><code>main.plugins.SATpwn = {str(self.plugin_enabled).lower()}</code></p>
-            <p><code>main.disable_defaults = {str(self.disable_defaults).lower()}</code></p>
-            <p><code>main.home_whitelist = "{','.join(sorted(self.home_whitelist))}"</code></p>
+            <p><b>Current Configuration:</b></p>
+            <p><code>[main.plugins]<br>SATpwn.enabled = {str(self.plugin_enabled).lower()}</code></p>
+            <p><code>[main]<br>disable_defaults = {str(self.disable_defaults).lower()}<br>home_whitelist = "{','.join(sorted(self.home_whitelist))}"</code></p>
             """
 
             # Main dashboard HTML
@@ -805,7 +818,7 @@ class SATpwn(plugins.Plugin):
                     table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
                     th, td {{ border: 1px solid #444; padding: 6px; text-align: left; vertical-align: top; }}
                     th {{ background-color: #333; font-weight: bold; }}
-                    code {{ background-color: #333; padding: 2px 4px; border-radius: 3px; }}
+                    code {{ background-color: #333; padding: 2px 4px; border-radius: 3px; font-size: 11px; }}
                     small {{ color: #888; }}
                     a {{ color: #569cd6; }}
                 </style>
