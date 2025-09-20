@@ -37,13 +37,13 @@ At the beginning of each epoch, the plugin calculates a "weight" for every chann
 -   **Loose Mode:** The plugin adds an "exploration bonus" to the weight of all channels, making it more likely to try less common channels. It also has a 10% chance to jump to a completely random supported channel to discover new networks.
 -   **Drive-by Mode:** This mode uses much shorter expiry times for APs (30 min) and clients (15 min). It also uses a lower score threshold and a shorter cooldown for initiating attacks, making it highly aggressive.
 -   **Recon Mode:** Systematically cycles through all supported channels to gather data without performing any attacks.
--   **Auto Mode:** This is where the GPS features come into play. The plugin uses the following logic to decide which sub-mode to use:
+-   **Auto Mode:** This is where the activity based dtection comes into play. The plugin uses the following logic to decide which sub-mode to use:
     -   If a whitelisted home SSID is visible, or the device has been stationary for over an hour, or it is within the home deadzone, it switches to **recon** mode.
-    -   If the device is moving (based on speed and distance), it switches to **drive-by** mode.
-    -   Otherwise, it will choose between **loose** and **strict** mode based on the amount of data it has collected.
+    -   If the device is moving, it will go into driveby mode.
+    -   If the device is stationary, it will go into recon mode.
+    -   If the device sees a lot of data, it will go into strict mode
+    -   If the device sees a not a whole lot of data, it will go into loose mode.
 
-### 4. Activity Based Detection
-The plugin uses state, and movement detection logic for AUTO mode. HOME/STATIONARY -><br> recon mode. MOVING/DRIVING -> driveby mode. <br> LOW DATA-> Loose Mode<br>RICH DATA -> Strict Mode<br>
 
 ## Installation
 
