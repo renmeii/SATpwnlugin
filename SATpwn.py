@@ -337,7 +337,7 @@ class SATpwn(plugins.Plugin):
         return score
 
     def _execute_attack(self, agent, ap_mac, client_mac):
-        """Execute deauth attack on target - no artificial rate limiting."""
+        """Execute deauth attack on target"""
         if not self.plugin_enabled:
             return
 
@@ -373,7 +373,6 @@ class SATpwn(plugins.Plugin):
                     break
             
             if target_ap and target_client:
-                # Execute deauth - NO RATE LIMITING
                 agent.deauth(target_ap, target_client)
                 self.attack_count += 1
                 logging.info(f"[SATpwn] Attack #{self.attack_count}: {client_mac} via {ap_mac}")
