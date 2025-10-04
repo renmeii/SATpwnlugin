@@ -46,7 +46,6 @@ At the beginning of each epoch, the plugin calculates a "weight" for every chann
 2.  Open your `config.toml` file and add the following line under the `main.plugins` section:
     ```toml
     main.plugins.SATpwn.enabled = true
-    main.disable_defaults = true # set this to true so SATpwn is the only scanning and running attack logic.
     ```
 3.  To use the home detection features, you must add your home SSIDs to the `main.home_whitelist` list in your `config.toml`:
     ```toml
