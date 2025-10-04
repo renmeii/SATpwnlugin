@@ -49,7 +49,7 @@ At the beginning of each epoch, the plugin calculates a "weight" for every chann
     ```
 3.  To use the home detection features, you must add your home SSIDs to the `main.home_whitelist` list in your `config.toml`:
     ```toml
-    main.home_whitelist = ["MyHomeSSID","AnotherHomeNetwork"]
+    main.home_whitelist = ["WuTangLan","NotaFBIvan"]
     ```
 4.  Restart your Pwnagotchi service to apply the changes:
     ```bash
