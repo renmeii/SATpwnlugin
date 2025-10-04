@@ -50,7 +50,7 @@ class SATpwn(plugins.Plugin):
         self.memory = {}
         self.modes = ['strict', 'loose', 'drive-by', 'recon', 'auto']
         self.memory_path = '/etc/pwnagotchi/SATpwn_memory.json'
-        self.executor = ThreadPoolExecutor(max_workers=3)
+        self.executor = ThreadPoolExecutor(max_workers=5)
         self.mode = self.modes[0]
         self.channel_stats = {}
         self.memory_is_dirty = True
