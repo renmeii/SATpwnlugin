@@ -22,13 +22,13 @@ class SATpwn(plugins.Plugin):
     __license__ = 'GPL3'
     __description__ = 'SATpwn intelligent targeting system'
 
-    # Class constants - optimized for maximum aggression
+    # Class constants
     AP_EXPIRY_SECONDS = 3600 * 48
     CLIENT_EXPIRY_SECONDS = 3600 * 24
-    ATTACK_SCORE_THRESHOLD = 20  # More aggressive
-    ATTACK_COOLDOWN_SECONDS = 90  # Shorter cooldown
+    ATTACK_SCORE_THRESHOLD = 20  
+    ATTACK_COOLDOWN_SECONDS = 90  
     SUCCESS_BONUS_DURATION_SECONDS = 1800
-    SCORE_DECAY_PENALTY_PER_HOUR = 2  # Reduced decay
+    SCORE_DECAY_PENALTY_PER_HOUR = 2  
     PMKID_FRIENDLY_APS_THRESHOLD = 3
     PMKID_FRIENDLY_BOOST_FACTOR = 1.5
     HANDSHAKE_WEIGHT = 10
@@ -37,8 +37,8 @@ class SATpwn(plugins.Plugin):
     EXPLORATION_PROBABILITY = 0.1
     DRIVE_BY_AP_EXPIRY_SECONDS = 1800
     DRIVE_BY_CLIENT_EXPIRY_SECONDS = 900
-    DRIVE_BY_ATTACK_SCORE_THRESHOLD = 5  # Very aggressive
-    DRIVE_BY_ATTACK_COOLDOWN_SECONDS = 30  # Very short
+    DRIVE_BY_ATTACK_SCORE_THRESHOLD = 5  
+    DRIVE_BY_ATTACK_COOLDOWN_SECONDS = 30 
 
     STATIONARY_SECONDS = 3600
     ACTIVITY_THRESHOLD = 5
