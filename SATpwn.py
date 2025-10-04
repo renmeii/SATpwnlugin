@@ -18,17 +18,17 @@ except ImportError:
 
 class SATpwn(plugins.Plugin):
     __author__ = 'Renmeii x Mr-Cass-Ette and discoJack too '
-    __version__ = 'x88.0.4'
+    __version__ = 'x88.0.5'
     __license__ = 'GPL3'
     __description__ = 'SATpwn intelligent targeting system'
 
-    # Class constants
+    # Class constants - optimized for maximum aggression
     AP_EXPIRY_SECONDS = 3600 * 48
     CLIENT_EXPIRY_SECONDS = 3600 * 24
-    ATTACK_SCORE_THRESHOLD = 20  
-    ATTACK_COOLDOWN_SECONDS = 90  
+    ATTACK_SCORE_THRESHOLD = 20
+    ATTACK_COOLDOWN_SECONDS = 90
     SUCCESS_BONUS_DURATION_SECONDS = 1800
-    SCORE_DECAY_PENALTY_PER_HOUR = 2  
+    SCORE_DECAY_PENALTY_PER_HOUR = 2
     PMKID_FRIENDLY_APS_THRESHOLD = 3
     PMKID_FRIENDLY_BOOST_FACTOR = 1.5
     HANDSHAKE_WEIGHT = 10
@@ -37,8 +37,8 @@ class SATpwn(plugins.Plugin):
     EXPLORATION_PROBABILITY = 0.1
     DRIVE_BY_AP_EXPIRY_SECONDS = 1800
     DRIVE_BY_CLIENT_EXPIRY_SECONDS = 900
-    DRIVE_BY_ATTACK_SCORE_THRESHOLD = 5  
-    DRIVE_BY_ATTACK_COOLDOWN_SECONDS = 30 
+    DRIVE_BY_ATTACK_SCORE_THRESHOLD = 5
+    DRIVE_BY_ATTACK_COOLDOWN_SECONDS = 30
 
     STATIONARY_SECONDS = 3600
     ACTIVITY_THRESHOLD = 5
@@ -50,7 +50,7 @@ class SATpwn(plugins.Plugin):
         self.memory = {}
         self.modes = ['strict', 'loose', 'drive-by', 'recon', 'auto']
         self.memory_path = '/etc/pwnagotchi/SATpwn_memory.json'
-        self.executor = ThreadPoolExecutor(max_workers=5)
+        self.executor = ThreadPoolExecutor(max_workers=3)
         self.mode = self.modes[0]
         self.channel_stats = {}
         self.memory_is_dirty = True
@@ -64,8 +64,6 @@ class SATpwn(plugins.Plugin):
         self._stationary_start = None
 
         self.plugin_enabled = True
-        self.disable_defaults = False
-        self.disabled_plugins = []
         
         self.attack_count = 0
         self.attack_success_count = 0
@@ -89,7 +87,6 @@ class SATpwn(plugins.Plugin):
                 logging.info("[SATpwn] No config.toml found - using defaults")
                 self.home_whitelist = set()
                 self.plugin_enabled = True
-                self.disable_defaults = False
                 return
 
             with open(config_path, "rb") as f:
@@ -117,7 +114,6 @@ class SATpwn(plugins.Plugin):
             if not self.plugin_enabled:
                 logging.info("[SATpwn] Plugin disabled - web interface only")
                 self.home_whitelist = set()
-                self.disable_defaults = False
                 return
 
             # Load whitelist from main section
@@ -134,45 +130,10 @@ class SATpwn(plugins.Plugin):
             else:
                 self.home_whitelist = set()
 
-            # Load disable_defaults from main section
-            if 'main' in conf and 'disable_defaults' in conf['main']:
-                self.disable_defaults = bool(conf['main']['disable_defaults'])
-                logging.info(f"[SATpwn] Exclusive mode: {self.disable_defaults}")
-            else:
-                self.disable_defaults = False
-
         except Exception as e:
             logging.error(f"[SATpwn] Error loading config: {e}")
             self.home_whitelist = set()
             self.plugin_enabled = True
-            self.disable_defaults = False
-
-    def _disable_other_plugins(self, agent):
-        """Disable all other plugins when exclusive mode is enabled."""
-        if not self.disable_defaults or not self.plugin_enabled:
-            return
-
-        try:
-            loaded_plugins = list(agent._plugins.keys()) if hasattr(agent, '_plugins') else []
-
-            for plugin_name in loaded_plugins:
-                if plugin_name.lower() != 'satpwn':
-                    try:
-                        if hasattr(agent, 'unload_plugin'):
-                            agent.unload_plugin(plugin_name)
-                        elif hasattr(agent, '_plugins') and plugin_name in agent._plugins:
-                            del agent._plugins[plugin_name]
-
-                        self.disabled_plugins.append(plugin_name)
-                        logging.info(f"[SATpwn] Disabled: {plugin_name}")
-                    except Exception as e:
-                        logging.error(f"[SATpwn] Failed to disable {plugin_name}: {e}")
-
-            if self.disabled_plugins:
-                logging.info(f"[SATpwn] Disabled {len(self.disabled_plugins)} plugins")
-
-        except Exception as e:
-            logging.error(f"[SATpwn] Error disabling plugins: {e}")
 
     def _update_activity_history(self, new_ap_count):
         """Track new AP discoveries for movement detection."""
@@ -238,8 +199,6 @@ class SATpwn(plugins.Plugin):
                     "version": self.__version__,
                     "stationary_start": self._stationary_start,
                     "plugin_enabled": self.plugin_enabled,
-                    "disable_defaults": self.disable_defaults,
-                    "disabled_plugins": self.disabled_plugins,
                     "attack_count": self.attack_count,
                     "attack_success_count": self.attack_success_count
                 },
@@ -267,7 +226,6 @@ class SATpwn(plugins.Plugin):
                     else:
                         self.mode = self.modes[0]
                     self._stationary_start = metadata.get("stationary_start", None)
-                    self.disabled_plugins = metadata.get("disabled_plugins", [])
                     self.attack_count = metadata.get("attack_count", 0)
                     self.attack_success_count = metadata.get("attack_success_count", 0)
                 else:
@@ -337,7 +295,7 @@ class SATpwn(plugins.Plugin):
         return score
 
     def _execute_attack(self, agent, ap_mac, client_mac):
-        """Execute deauth attack on target"""
+        """Execute deauth attack on target - no artificial rate limiting."""
         if not self.plugin_enabled:
             return
 
@@ -373,6 +331,7 @@ class SATpwn(plugins.Plugin):
                     break
             
             if target_ap and target_client:
+                # Execute deauth - NO RATE LIMITING
                 agent.deauth(target_ap, target_client)
                 self.attack_count += 1
                 logging.info(f"[SATpwn] Attack #{self.attack_count}: {client_mac} via {ap_mac}")
@@ -426,11 +385,7 @@ class SATpwn(plugins.Plugin):
 
         self.agent = agent
         self.ready = True
-
-        self._disable_other_plugins(agent)
-
-        exclusive_status = "EXCLUSIVE" if self.disable_defaults else "SHARED"
-        logging.info(f"[SATpwn] Ready - Mode: {self.mode} ({exclusive_status})")
+        logging.info(f"[SATpwn] Ready - Mode: {self.mode}")
 
     def on_ui_setup(self, ui):
         """Setup UI display element."""
@@ -455,8 +410,6 @@ class SATpwn(plugins.Plugin):
             mode_text = self.mode.capitalize()
             if self.mode == 'auto' and self._current_auto_submode:
                 mode_text += f" ({self._current_auto_submode})"
-            if self.disable_defaults:
-                mode_text += " [E]"
             ui.set('sat_mode', f'SAT: {mode_text}')
         except Exception as e:
             logging.debug(f"[SATpwn] UI update error: {e}")
@@ -722,7 +675,7 @@ class SATpwn(plugins.Plugin):
         return Response("Not Found", status=404, mimetype='text/html')
 
     def _generate_dashboard(self):
-        """Generate HTML dashboard interface - unchanged."""
+        """Generate HTML dashboard interface."""
         if not self.plugin_enabled:
             return Response("""
             <html>
@@ -831,7 +784,7 @@ class SATpwn(plugins.Plugin):
         </head>
         <body>
         <div class="container">
-        <h1>SATpwn v{self.__version__} - UNLEASHED</h1>
+        <h1>SATpwn v{self.__version__}</h1>
         
         <div class="grid-3">
         <div class="card">
@@ -852,9 +805,8 @@ class SATpwn(plugins.Plugin):
         
         <div class="card">
         <h2>Status</h2>
-        <p><b>Type:</b> {'EXCLUSIVE' if self.disable_defaults else 'SHARED'}</p>
-        <p><b>Disabled:</b> {len(self.disabled_plugins)}</p>
         <p><b>Rate Limit:</b> <span style="color:#00ff00;">DISABLED</span></p>
+        <p><b>Thread Pool:</b> 3 workers</p>
         </div>
         </div>
         
