@@ -18,7 +18,7 @@ except ImportError:
 
 class SATpwn(plugins.Plugin):
     __author__ = 'Renmeii x Mr-Cass-Ette and discoJack too '
-    __version__ = 'x88.0.5'
+    __version__ = '88.0.5'
     __license__ = 'GPL3'
     __description__ = 'SATpwn intelligent targeting system'
 
